@@ -1,0 +1,338 @@
+#!/bin/bash
+# General functions for menu-driven installer
+# Copyright (c) 2019, Matthew Madison.
+
+########
+# Main menu management functions
+#
+#
+# Every item for the main menu is constructed
+# from:
+#    - text describing the item
+#    - a function that gets executed when the item
+#      is selected
+#    - an optional function to display the status
+#      of the item
+#
+# The menu item information is stored in indexed
+# arrays.  The platform-specific sysinstall file
+# must set up the items in the desired order.
+########
+
+declare -a ITEMTEXT ITEMEXEC ITEMSTATUS
+
+###
+# menu_additem
+#
+# Appends a menu item to the item arrays
+menu_additem() {
+    itemtext="$1"
+    itemexec="$2"
+    itemstatus="$3"
+
+    ITEMTEXT[${#ITEMTEXT[@]}]="$itemtext"
+    ITEMEXEC[${#ITEMEXEC[@]}]="$itemexec"
+    ITEMSTATUS[${#ITEMSTATUS[@]}]="$itemstatus"
+
+}
+
+###
+# main_menu
+#
+# The main menu loop that drives the selection
+# and execution of the installer steps.
+main_menu() {
+    local i status choice alldone
+    local -a MENU
+    local -A DISPATCH
+    alldone=0
+    while [ $alldone -ne 1 ]; do
+	unset MENU
+	for i in $(seq 0 $(expr ${#ITEMTEXT[@]} - 1)); do
+	    text="${ITEMTEXT[$i]}"
+	    status="${ITEMSTATUS[$i]}"
+	    if [ -n "$status" ]; then
+		status=$(eval $status)
+	    fi
+	    if [ -n "$status" ]; then
+		status=" [$status]"
+	    fi
+	    MENU[$i]="$text$status"
+	    DISPATCH["$text$status"]=${ITEMEXEC[$i]}
+	done
+	MENU[${#MENU[@]}]="Exit"
+	DISPATCH["Exit"]="alldone=1"
+	PS3="Enter choice: "
+	echo "===== MAIN MENU ====="
+	select choice in "${MENU[@]}"
+	do
+	    [ -n "$choice" ] || choice=$(alt_select MENU $REPLY)
+	    if [ -n "$choice" ]; then
+		eval ${DISPATCH["$choice"]}
+	    fi
+	    break
+	done
+    done
+    # Update the RTC before exiting, some platforms need this
+    hwclock --systohc >/dev/null 2>&1
+}
+
+
+########
+# Utility functions
+########
+
+
+###
+# confirm
+# Simple yes/no confirmation.  No default answer.
+confirm() {
+    local prompt="$1"
+    local -l ans
+    while true; do
+	read -p "$prompt" ans
+	case $ans in
+	    yes|y)
+		return 0;;
+	    no|n)
+		return 1;;
+	    *)
+		echo "Please answer yes or no."
+		;;
+	esac
+    done
+}
+
+###
+# alt_select
+#
+# Provides alternative menu selection using
+# the text of the menu items.  When the 'select'
+# command returns a null string for the choice,
+# pass the name of the array holding the menu
+# items and $REPLY (unquoted) to this function.
+#
+# Matches are case-insensitive.
+#
+# Also recognizes "0" as a synonym for the last
+# menu item.
+alt_select() {
+    local -n menu="$1"
+    local choice="${2^^}"
+    if [ "$choice" = "0" ]; then
+	echo "${menu[@]: -1:1}"
+	return 0
+    fi
+    local len=${#choice}
+    local itm itm_up
+    for itm in "${menu[@]}"; do
+	itm_up="${itm::$len}"
+	itm_up="${itm_up^^}"
+	if [ "${itm_up}" = "${choice}" ]; then
+	    echo "$itm"
+	    return 0
+	fi
+    done
+    echo ""
+    return 0
+}
+
+########
+# Generic setup functions, common to multiple platforms
+########
+
+####
+# System clock/RTC setup
+####
+
+setup_rtc() {
+    local curdt
+    local choice
+    local rtc_menu=("Use ntpdate-sync to update clock" "Manually update date/time" "Return to main menu")
+    local alldone=0
+    PS3="Enter choice: "
+    while [ $alldone -ne 1 ]; do
+	curdt=$(date)
+	echo "Current date/time: $curdt"
+	select choice in "${rtc_menu[@]}"; do
+	    [ -n "$choice" ] || choice=$(alt_select rtc_menu $REPLY)
+	    case $choice in
+		Use*)
+		    ntpdate-sync
+		    ;;
+		Man*)
+		    local d t
+		    read -p "Enter date and time as YYYY-MM-DD HH:MM:SS, or press enter to abort: " d t
+		    if [ -n "$d" -a -n "$t" ]; then
+			if date -s "$d $t"; then
+			    echo -n "System time set, updating RTC..."
+			    if hwclock --systohc; then
+				echo "[OK]"
+			    else
+				echo "[FAIL]"
+			    fi
+			else
+			    echo "ERR: could not set system date/time"
+			fi
+		    fi
+		    ;;
+		Ret*)
+		    alldone=1
+		    ;;
+		*)
+		    echo "Unknown option selected"
+		    ;;
+	    esac
+	    break
+	done
+    done
+    return 0
+}
+
+menu_setup_rtc() {
+    menu_additem "Real-time clock setup" setup_rtc date
+}
+
+####
+# Software selection and installation
+####
+
+select_software() {
+    local cursw
+    local choice
+    local sw_menu=("Download rootfs tarball to install" "Enter filename or URL for rootfs tarball" "Return to main menu")
+    local alldone=0
+    PS3="Enter choice: "
+    while [ $alldone -ne 1 ]; do
+	cursw="${SYSINSTALL_SOFTWARE_PKG:-(none)}"
+	echo "Software to install: $cursw"
+	select choice in "${sw_menu[@]}"; do
+	    [ -n "$choice" ] || choice=$(alt_select sw_menu $REPLY)
+	    case $choice in
+		Download*)
+		    local url
+		    read -p "Enter URL of software package to download: " url
+		    [ ! -d /tmp/sysinstall ] && mkdir /tmp/sysinstall
+		    [ -f /tmp/sysinstall/downloaded.tar.gz ] && rm -f /tmp/sysinstall/downloaded.tar.gz
+		    if [ "${url:0:4}" = "scp " ]; then
+			local khfdir=`mktemp -q -d -p /tmp sysiscpXXXXXX`
+			touch $khfdir/known_hosts
+			if scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=$khfdir/known_hosts "${url:4}" /tmp/sysinstall/downloaded.tar.gz; then
+			    SYSINSTALL_SOFTWARE_PKG="/tmp/sysinstall/downloaded.tar.gz"
+			else
+			    echo "ERR: download unsuccessful" >&2
+			fi
+			rm -r $khfdir 2>/dev/null
+		    elif curl --tftp-blksize 1400 -o /tmp/sysinstall/downloaded.tar.gz "$url"; then
+			SYSINSTALL_SOFTWARE_PKG="/tmp/sysinstall/downloaded.tar.gz"
+		    else
+			echo "ERR: download unsuccessful" >&2
+		    fi
+		    ;;
+		Enter*)
+		    local url
+		    read -p "Enter URL of rootfs tarball to download: " url
+		    SYSINSTALL_SOFTWARE_PKG="$url"
+		    ;;
+		Ret*)
+		    alldone=1
+		    ;;
+		*)
+		    echo "Unknown option selected"
+		    ;;
+	    esac
+	    break
+	done
+    done
+    return 0
+}
+
+select_dataimg() {
+    local curdata
+    local choice
+    local data_menu=("Download dataimg tarball to install" "Enter filename or URL for dataimg tarball" "Return to main menu")
+    local alldone=0
+    PS3="Enter choice: "
+    while [ $alldone -ne 1 ]; do
+	curdata="${SYSINSTALL_DATAIMG_PKG:-(none)}"
+	echo "Dataimg tarball to install: $curdata"
+	select choice in "${data_menu[@]}"; do
+	    [ -n "$choice" ] || choice=$(alt_select data_menu $REPLY)
+	    case $choice in
+		Download*)
+		    local url
+		    read -p "Enter URL of dataimg tarball to download: " url
+		    [ ! -d /tmp/sysinstall ] && mkdir /tmp/sysinstall
+		    [ -f /tmp/sysinstall/downloaded-data.tar.gz ] && rm -f /tmp/sysinstall/downloaded-data.tar.gz
+		    if [ "${url:0:4}" = "scp " ]; then
+			local khfdir=`mktemp -q -d -p /tmp sysiscpXXXXXX`
+			touch $khfdir/known_hosts
+			if scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=$khfdir/known_hosts "${url:4}" /tmp/sysinstall/downloaded-data.tar.gz; then
+			    SYSINSTALL_DATAIMG_PKG="/tmp/sysinstall/downloaded-data.tar.gz"
+			else
+			    echo "ERR: download unsuccessful" >&2
+			fi
+			rm -r $khfdir 2>/dev/null
+		    elif curl --tftp-blksize 1400 -o /tmp/sysinstall/downloaded-data.tar.gz "$url"; then
+			SYSINSTALL_DATAIMG_PKG="/tmp/sysinstall/downloaded-data.tar.gz"
+		    else
+			echo "ERR: download unsuccessful" >&2
+		    fi
+		    ;;
+		Enter*)
+		    local url
+		    read -p "Enter URL of dataimg tarball to download: " url
+		    SYSINSTALL_DATAIMG_PKG="$url"
+		    ;;
+		Ret*)
+		    alldone=1
+		    ;;
+		*)
+		    echo "Unknown option selected"
+		    ;;
+	    esac
+	    break
+	done
+    done
+    return 0
+}
+
+install_software() {
+    if /usr/sbin/tegra-sysinstall "$SYSINSTALL_SOFTWARE_PKG" "$SYSINSTALL_DATAIMG_PKG"; then
+	SOFTWARE_INSTALLED="yes"
+	echo "SUCCESS: software installed"
+    else
+	echo "ERR: software installation failed" >&2
+    fi
+}
+
+####
+# software-related menu setup functions
+####
+
+SOFTWARE_INSTALLED="no"
+
+software_selection() {
+    echo "$SYSINSTALL_SOFTWARE_PKG"
+}
+
+dataimg_selection() {
+    echo "$SYSINSTALL_DATAIMG_PKG"
+}
+
+software_status() {
+    if [ "$SOFTWARE_INSTALLED" = "yes" ]; then
+	echo "DONE"
+    else
+	echo ""
+    fi
+}
+
+menu_setup_software() {
+    menu_additem "Select rootfs tarball" select_software software_selection
+    menu_additem "Select dataimg tarball" select_dataimg dataimg_selection
+    menu_additem "Install rootfs and dataimg" install_software software_status
+}
+
+menu_setup_rtc
+menu_setup_software

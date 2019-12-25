@@ -1,0 +1,703 @@
+#!/bin/bash
+# Common functions for tegra installer scripts
+# Copyright (c) 2019, Matthew Madison
+
+declare -A EMMC_PARTITIONS CRYPT_PARTITIONS MKFS_ARGS PARTINDEX
+
+PARTITIONS_TO_FORMAT=(DATA)
+MKFS_ARGS[DATA]="-i 4096"
+
+ROOTFSLABEL=(APP APP_b)
+ROOTFSDEVTYPE="mmcblk"
+UBOOT_ROOTFSDEVTYPE="mmc"
+ROOTFSDEVNUM=0
+ROOTFSDEV[0]="$ROOTFSDEVTYPE$ROOTFSDEVNUM"
+ROOTFSDEV[1]="$ROOTFSDEVTYPE$ROOTFSDEVNUM"
+UBOOT_ROOTFSDEVNUM="0"
+ROOTFSPART[0]="p1"
+UBOOT_ROOTFSPART[0]="1"
+ROOTFSPART[1]="p2"
+UBOOT_ROOTFSPART[1]="2"
+DATADEV="$ROOTFSDEVTYPE$ROOTFSDEVNUM"
+
+# identify_platform_setup
+#
+# Initializes storage-related variables.
+#
+identify_platform_setup() {
+    local MOUNTPOINT NAME PKNAME PARTLABEL TYPE
+    local diskdev_candidate
+    local -a ARGS
+    local found_rootfs
+    local numslots=`nvbootctrl get-number-slots`
+    local curslot=`nvbootctrl get-current-slot`
+    local rootfsdev="$ROOTFSDEVTYPE$ROOTFSDEVNUM"
+    DATAPART="TBD"
+    DISKDEV=
+    DISKPART=1
+    INSTALLTO=
+    EMMC_PARTITIONS=()
+    CRYPT_PARTITIONS=()
+    PARTINDEX=()
+
+    if [ "$numslots" != "2" ]; then
+	if ! nv_update_engine --enable-ab 2>&1 >/dev/null; then
+	    echo "ERR: could not enable redundant boot" >&2
+	    exit 1
+	fi
+    fi
+    if [ "$INITIAL_SETUP" = "yes" ]; then
+	INSTALLTO="0 1"
+    elif [ "$curslot" != "0" -a "$curslot" != "1" ]; then
+	echo "ERR: could not identify installation partition" >&2
+	exit 1
+    else
+	INSTALLTO=$(expr 1 - $curslot)
+    fi
+
+    while read -a ARGS; do
+	eval ${ARGS[@]}
+	if [ "${TYPE:0:5}" = "crypt" ]; then
+	    EMMC_PARTITIONS[$NAME]="mapper/$NAME"
+	    CRYPT_PARTITIONS[$NAME]="mapper/$NAME"
+	    case "$NAME" in
+		APP)
+		    ROOTFSDEV[0]="mapper/"
+		    ROOTFSPART[0]="$NAME"
+		    ;;
+		APP_b)
+		    ROOTFSDEV[1]="mapper/"
+		    ROOTFSPART[1]="$NAME"
+		    ;;
+		DATA)
+		    DATADEV="mapper/"
+		    DATAPART="$NAME"
+		    ;;
+	    esac
+	    continue
+	fi
+	if [ "$PKNAME" = "$rootfsdev" -a -n "$PARTLABEL" ]; then
+	    local ptnfile="/sys/block/$PKNAME/$NAME/partition"
+	    EMMC_PARTITIONS[$PARTLABEL]="$NAME"
+	    if [ ! -e "$ptnfile" ]; then
+		echo "ERR: cannot identify partition number for $NAME" >&2
+		exit 1
+	    fi
+	    PARTINDEX[$PARTLABEL]=`cat $ptnfile`
+	    if [ "$PARTLABEL" = "APP" ]; then
+		ROOTFSPART[0]="${NAME#${PKNAME}}"
+	    elif [ "$PARTLABEL" = "APP_b" ]; then
+		ROOTFSPART[1]="${NAME#${PKNAME}}"
+	    elif [ "$PARTLABEL" = "UDA" -o "$PARTLABEL" = "DATA" ]; then
+		DATAPART="${NAME#${PKNAME}}"
+	    fi
+	fi
+    done < <(lsblk -P -o MOUNTPOINT,NAME,PKNAME,PARTLABEL,TYPE)
+    if [ "$DATAPART" = "TBD" -a "$INITIAL_SETUP" != "yes" ]; then
+	echo "ERR: no DATA partition found" >&2
+	exit 1
+    fi
+}
+
+identify_platform_setup
+
+# copy_file <filename> <dest-dir> [var]
+#
+# Copies the <filename> to <dest-dir>.
+# If <var> is specifed, that variable is set to the
+# full pathname of <filename>.
+#
+copy_file() {
+    local fullpath=`readlink -f "$1"`
+    if [ -z "$fullpath" -o ! -e "$fullpath" ]; then
+        echo "ERR: file not found: $1" >&2
+        return 1
+    fi
+    local destdir=`readlink -f "$2"`
+    if [ `dirname "$fullpath"` = "$destdir" ]; then
+        echo "ERR: file to be copied already resides in the target directory" >&2
+        return 1
+    fi
+    if cp "$fullpath" "$2"/; then
+        if [ -n "$3" ]; then
+            eval $3="\"$fullpath\""
+        fi
+    else
+        echo "ERR: failed to copy file" >&2
+        return 1
+    fi
+    return 0
+}
+
+# download_file <file-or-url> <download-dir> <filenamevar>
+#
+#  For non-file:// URLs, uses curl to download the file at
+#  the named URL to <download-dir>.  For files (bare pathnames
+#  or file:// URLs), makes a copy in <download-dir> of the
+#  named file.  The variable in <filenamevar> is set to the
+#  basename of the file created.
+#
+#  Called from fetch_package.
+#
+download_file() {
+    local file_or_url="$1"
+    local dl_dir="$2"
+    local filenamevar="$3"
+    local filename
+    local scheme=`echo "$file_or_url" | sed -re's,^\s*([^:]+:).*,\1,'`
+
+    if [ -n "$scheme" -a "${scheme: -1}" = ":" -a "$scheme" != "file:" ]; then
+        local curdir="$PWD"
+        cd "$dl_dir"
+        if ! curl --tftp-blksize 1400 -f -O "$file_or_url"; then
+            cd "$curdir"
+            return 1
+        fi
+        cd "$curdir"
+        filename=`basename "$file_or_url"`
+    else
+        if [ "$scheme" = "file:" ]; then
+            file_or_url=`echo "$file_or_url" | sed -re's,^\s*[^:]+:(.*),\1,'`
+        fi
+        if ! copy_file "$file_or_url" "$dl_dir" filename; then
+            return 1
+        fi
+        filename=`basename "$filename"`
+    fi
+    eval $filenamevar="\"$filename\""
+    return 0
+}
+
+# package_preinstall
+#
+# Preinstallation checks.
+#
+package_preinstall() {
+    local rootfsdev="/dev/$ROOTFSDEVTYPE$ROOTFSDEVNUM"
+
+    # Don't need this during sysinstall
+    [ "$INITIAL_SETUP" != "yes" ] || return 0
+
+    local needprobe
+    #
+    # Delete the extra partition created at flash time.
+    #
+    if [ -n "${EMMC_PARTITIONS[unused]}" ]; then
+	if ! sgdisk $rootfsdev --delete=${PARTINDEX[unused]} >/dev/null 2>&1; then
+	    echo "ERR: could not delete 'unused' partition" >&2
+	    return 1
+	fi
+	needprobe="yes"
+    fi
+    #
+    # Normalize the GPT size.
+    #
+    local ptsize=`sgdisk $rootfsdev --print | grep '^Partition table holds' | cut -d' ' -f6`
+    ptsize=$(expr $ptsize + 0 2>/dev/null)
+    if [ -n "$ptsize" ]; then
+	if [ $ptsize -lt 128 ]; then
+	    echo "[Skipping GPT resizing due to NVIDIA bootloader bug]"
+	    #if ! sgdisk $rootfsdev --resize-table=128 >/dev/null 2>&1; then
+	    #    echo "ERR: could not resize GPT" >&2
+	    #    return 1
+	    #fi
+	    #needprobe="yes"
+	fi
+    else
+	echo "ERR: could not determine partition table size" >&2
+	return 1
+    fi
+
+    if [ "$needprobe" = "yes" ]; then
+	reprobe_rootfsdev
+	identify_platform_setup || return 1
+    fi
+    return 0
+}
+
+# install_rootfs <targetdev> <index> <tarballname>
+#
+# Installs a rootfs from a tarball.
+#
+install_rootfs() {
+    local targetdev="$1"
+    local mptemp=`mktemp -q -d /tmp/inst-rootfs.XXXXXX`
+    local which=$2
+    local tarball="$3"
+    local rc=0
+    local lblarg
+    local i
+    test -b $targetdev || return 1
+    if [ -n "${ROOTFSLABEL[$which]}" ]; then
+	lblarg="-L ${ROOTFSLABEL[$which]}"
+    fi
+    mkfs.ext4 -q -F -i 4096 $lblarg $targetdev >/dev/null || return 1
+    mount $targetdev $mptemp || return 1
+    if ! tar -C $mptemp --xattrs --xattrs-include="*" --warning=no-timestamp -x -f "$tarball"; then
+        echo "ERR: rootfs installation failed" >&2
+        rc=1
+    fi
+    sync
+    for i in 1 2 3; do
+	if umount $mptemp 2>/dev/null; then
+	    rmdir $mptemp
+	    break
+	fi
+	sleep 1
+    done
+    return $rc
+}
+
+
+# update_datapart <mountpoint> <tarfile>
+#
+# Updates the /data partition from a tarball, using
+# the (GNU tar-specific) --keep-newer-files option.
+#
+update_datapart() {
+    local datamount="${1:-/data}"
+    local dataskel="${2}"
+    tar -C "$datamount" --keep-newer-files --warning=no-timestamp --xattrs --xattrs-include="*" -x -f "$dataskel" 2>/dev/null
+}
+
+# partition_available <devname>
+#
+# Checks to see if the <devname> partition is not
+# mounted.  Only looks at ext3/ext4 partitions.
+#
+partition_available() {
+    local target=$1
+    local MOUNTPOINT FSTYPE
+
+    if [ ! -b $target ]; then
+        echo "ERR: not a partition: $target" >&2
+        return 1
+    fi
+    eval `lsblk -o MOUNTPOINT,FSTYPE -P ${target}`
+    if [ "$FSTYPE" = "ext3" -o "$FSTYPE" = "ext4" ]; then
+	if  [ -n "$MOUNTPOINT" ]; then
+	    return 1
+	fi
+    fi
+    return 0
+}
+
+# repartition_gpt_device <device> <partition-config-file>
+#
+# Re-partitions a GPT disk
+repartition_gpt_device() {
+    local pftmp=`mktemp -q`
+    local name size type guid file startpos curpos endpos partnum typearg
+    echo "Re-partitioning device $1"
+    if [ ! -b "$1" ]; then
+	echo "ERR: $1 is not a block device" >&2
+	return 1
+    fi
+    if ! sgdisk "$1" --disk-guid=R --clear >/dev/null 2>&1; then
+	echo "ERR: could not clear partition table on $1" >&2
+	return 1
+    fi
+    grep -v '^[[:space:]]*#' "$2" >$pftmp
+    curpos=0
+    partnum=0
+    while IFS=, read name size type guid file startpos; do
+	if [ -z "$name" -o -z "$size" ]; then
+	    continue
+	fi
+	echo -n " -- creating partition $name... "
+	if [ -z "$startpos" ]; then
+	    startpos=0
+	fi
+	if [ $startpos -ne 0 ]; then
+	    curpos=$startpos
+	fi
+	partnum=$(expr $partnum + 1)
+	if [ -n "$type" ]; then
+	    typearg="--typecode=$partnum:$type"
+	else
+	    typearg=""
+	fi
+	if [ -n "guid" ]; then
+	    guidarg="--partition-guid=$partnum:$guid"
+	else
+	    guidarg="--partition-guid=$partnum:R"
+	fi
+	if [ "$size" = "REMAIN" ]; then
+	    if ! sgdisk "$1" -a 1 --largest-new=$partnum $typearg $guidarg -c "$partnum:$name" >/dev/null 2>&1; then
+		echo "[FAIL]"
+		rm -f "$pftmp"
+		return 1
+	    fi
+	else
+	    endpos=$(expr $curpos + $size - 1)
+	    if ! sgdisk "$1" -a 1 --new=$partnum:$curpos:$endpos $typearg $guidarg -c "$partnum:$name" >/dev/null 2>&1; then
+		echo "[FAIL]"
+		rm -f "$pftmp"
+		return 1
+	    fi
+	    curpos=$(expr $endpos + 1)
+	fi
+	echo "[OK]"
+    done < "$pftmp"
+    rm -f "$pftmp"
+    if ! sgdisk "$1" --verify >/dev/null 2>&1; then
+	echo "ERR: partition table verificiation failed for $1" >&2
+	return 1
+    fi
+    sgdisk "$1" --print
+    partprobe "$1"
+    return 0
+}
+
+# create_luks_partitions
+#
+# Creates encrypted containers on any partitions whose labels are
+# prefixed with 'crypt-'.  The name after the prefix is used as
+# the device name under /dev/mapper, and should correspond to
+# the partition label that would be used in the non-encrypted case.
+create_luks_partitions() {
+    local ppdir="$1"
+    local pftmp=`mktemp -q`
+    local name size type guid file startpos realname luksdev
+    grep -v '^[[:space:]]*#' "$2" >$pftmp
+    while IFS=, read name size type guid file startpos; do
+	[ "${name:0:6}" = "crypt-" ] || continue
+	realname="${name:6}"
+	[ ! -b /dev/mapper/$realname ] || cryptsetup luksClose /dev/mapper/$realname
+	luksdev=`blkid -t PARTLABEL=$name | awk -F: '{print $1}'`
+	echo -n "Encrypting $luksdev($name)..."
+	[ -n "$realname" -a -n "$luksdev" -a -b "$luksdev" ] || continue
+	if ! cat "$ppdir/passphrase" | cryptsetup --type luks --cipher aes-xts-plain64 --hash sha256 \
+						  --use-random --key-file - luksFormat $luksdev 2>/dev/null; then
+	    echo "[FAIL]"
+	    return 1
+	fi
+	# now 'open' it
+	if ! cryptsetup luksOpen --key-file "$ppdir/passphrase" $luksdev $realname 2>/dev/null; then
+	    echo "[FAIL]"
+	    return 1
+	fi
+	echo "[OK]"
+    done < "$pftmp"
+    return 0
+}
+
+# reprobe_rootfsdev
+reprobe_rootfsdev() {
+    partprobe /dev/$ROOTFSDEVTYPE$ROOTFSDEVNUM >/dev/null 2>&1
+    sleep 1
+    blkid -p -s none /dev/$ROOTFSDEVTYPE$ROOTFSDEVNUM >/dev/null 2>&1
+    sleep 1
+}
+
+# secure_boot_enabled
+#
+# returns 0 (success) if unit is secured,
+# returns 1 (fail) if not secured
+secure_boot_enabled() {
+    local odm_production_mode=`cat /sys/devices/platform/tegra-fuse/odm_production_mode`
+    [ -n "$odm_production_mode" -a $(($odm_production_mode)) -ne 0 ] || return 1
+    return 0
+}
+
+# update_bootloader [rootfs-mountpoint]
+#
+# For initial installs, use the tegra-boot-tools updater to
+# write the update to both slots.  Otherwise, use nv_update_engine.
+#
+update_bootloader() {
+    local updlog=`mktemp /tmp/bup.log.XXXXXX`
+    local fs rc d
+    local mounts=(/dev /sys /run /usr/bin /usr/lib /lib)
+
+    if [ "$INITIAL_SETUP" = "yes" ]; then
+	if ! tegra-bootloader-update --initialize "$1/opt/ota_package/bl_update_payload"; then
+	    return 1
+	fi
+	return 0
+    fi
+    mount -t proc proc "$1/proc"
+    for fs in ${mounts[@]}; do
+	mount --bind $fs "$1$fs"
+    done
+    rc=0
+    if ! chroot "$1" /usr/sbin/nv_update_engine --install no-reboot 2>&1 >"$updlog"; then
+	echo "ERR: nv_update_engine failed, log follows:" >&2
+	cat "$updlog" >&2
+	rc=1
+    fi
+    for fs in ${mounts[@]}; do
+	umount "$1$fs"
+    done
+    umount "$1/proc"
+    return $rc
+}
+
+###
+# verify_device_availability
+#
+verify_device_availability() {
+    if [ -z "$INSTALLTO" ]; then
+	echo "ERR: could not identify rootfs partition(s) to install to" >&2
+	return 1
+    fi
+    return 0
+}
+
+# make_fake_parttable
+#
+# Extract a fake 'partition_table' file from the GPT for
+# use by create_luks_partitions. Since that function only
+# really needs the partition name, some of the fields
+# are omitted (notably the partition type code and start
+# fields).
+#
+# Returns: 0 (success) if crypt-XXXXX partition(s) found
+#          non-0 (fail) otherwise
+make_fake_parttable() {
+    local ptfile="$1"
+    local NAME PARTLABEL SIZE PARTUUID
+    local -a ARGS
+    local foundcrypt sizeinblks
+
+    rm -f $ptfile
+    touch $ptfile
+    while read -a ARGS; do
+	eval ${ARGS[@]}
+	[ "${PARTLABEL:0:6}" != "crypt-" ] || foundcrypt="yes"
+	sizeinblks=`expr $SIZE / 512`
+	echo "$PARTLABEL,$sizeinblks,,$PARTUUID,," >> $ptfile
+    done < <(lsblk -P -b -o NAME,PARTLABEL,SIZE,PARTUUID)
+    [ "$foundcrypt" = "yes" ]
+}
+
+# initialize_devices
+#
+# The TX2 early-stage boot code verifies the entire boot chain,
+# including boot code located in normal partitions in the eMMC,
+# through a table created from the partition layout XML file
+# used by NVIDIA's flashing tools.
+#
+# For this reason, we cannot repartition it here, otherwise
+# we will likely render the device unbootable. However, we
+# can do some cleanup of the main GPT that was created
+# at flash time, bringing it up to GPT specs and removing
+# the 'unused' partition that was required for the NVIDIA
+# flash tools.
+initialize_devices() {
+    local rootfsdev="/dev/$ROOTFSDEVTYPE$ROOTFSDEVNUM"
+    local part
+
+    if [ "$INSTALLTO" = "0 1" -a -s "@TOOLSDIR@/partition_table" ]; then
+	echo "ERROR: repartitioning of the eMMC is not supported" >&2
+    fi
+
+    local needprobe
+    #
+    # Delete the extra partition created at flash time.
+    #
+    if [ -n "${EMMC_PARTITIONS[unused]}" ]; then
+	echo -n "Removing unused partition..."
+	if ! sgdisk $rootfsdev --delete=${PARTINDEX[unused]} >/dev/null 2>&1; then
+	    echo "[FAIL]"
+	    echo "ERR: could not delete 'unused' partition" >&2
+	    return 1
+	fi
+	needprobe="yes"
+	echo "[OK]"
+    fi
+    #
+    # Normalize the GPT size.
+    #
+    local ptsize=`sgdisk $rootfsdev --print | grep '^Partition table holds' | cut -d' ' -f6`
+    ptsize=$(expr $ptsize + 0 2>/dev/null)
+    if [ -n "$ptsize" ]; then
+	if [ $ptsize -lt 128 ]; then
+	    echo "[Skipping GPT resizing due to NVIDIA bootloader bug]"
+	    #echo -n "Resizing GPT..."
+	    #if ! sgdisk $rootfsdev --resize-table=128 >/dev/null 2>&1; then
+	    #    echo "[FAIL]"
+	    #    echo "ERR: could not resize GPT" >&2
+	    #    return 1
+	    #fi
+	    #needprobe="yes"
+	    #echo "[OK]"
+	fi
+    else
+	echo "ERR: could not determine partition table size" >&2
+	return 1
+    fi
+
+    if [ "$needprobe" = "yes" ]; then
+	reprobe_rootfsdev
+	identify_platform_setup || return 1
+	needprobe=
+    fi
+
+    if ! secure_boot_enabled; then
+	echo "NOTE: secure boot not enabled, skipping partition encryption"
+	return 0
+    fi
+
+    for part in APP APP_b DATA; do
+	if [ -z "${CRYPT_PARTITIONS[$part]}" -a -z "${EMMC_PARTITIONS[crypt-$part]}" ]; then
+	    echo -n "Renaming $part to crypt-$part..."
+	    if sgdisk $rootfsdev --change-name=${PARTINDEX[$part]}:crypt-$part >/dev/null 2>&1; then
+		echo "[OK]"
+		needprobe="yes"
+	    else
+		echo "[FAIL]"
+		return 1
+	    fi
+	fi
+    done
+
+    if [ "$needprobe" = "yes" ]; then
+	reprobe_rootfsdev
+	identify_platform_setup || return 1
+	needprobe=
+    fi
+
+    local fakept=`mktemp -q`
+    if make_fake_parttable $fakept; then
+	local ppdir=`mktemp -q -d /run/setup-pp.XXXXXX`
+	keystoretool -p > $ppdir/passphrase
+	if ! create_luks_partitions $ppdir $fakept; then
+	    rm -rf $ppdir
+	    return 1
+	fi
+	rm -rf "$ppdir"
+	reprobe_rootfsdev
+	identify_platform_setup || return 1
+    fi
+    return 0
+}
+
+# format_partitions
+#
+# Partitions listed in PARTITIONS_TO_FORMAT get formatted
+# using ext4 filesystem with the options set in MKFS_ARGS[<partname>].
+# Partitions are restored from original contents
+# if this is a re-partition operation (saved by initialize_devices).
+format_partitions() {
+    local tmpmnt=$(mktemp -q -d /tmp/prestore.XXXXXX)
+    local part
+    for part in ${PARTITIONS_TO_FORMAT[@]}; do
+	local partdev="/dev/${EMMC_PARTITIONS[$part]}"
+	if [ -n "$partdev" -a -b "$partdev" ]; then
+	    echo -n "$part (${partdev}): formatting (${MKFS_ARGS[$part]})..."
+	    if ! mkfs.ext4 -q -L $part ${MKFS_ARGS[$part]} $partdev >/dev/null; then
+		echo "[FAILED]"
+		return 1
+	    fi
+	    if [ -f "/tmp/${part}.tar.gz" ]; then
+		echo -n " restoring..."
+		mount "$partdev" "$tmpmnt"
+		if ! tar --keep-newer-files --xattrs --xattrs-include="*" -x -f "/tmp/${part}.tar.gz" -C "$tmpmnt" 2>/dev/null; then
+		    umount "$tmpmnt"
+		    echo "[FAILED]"
+		    return 1
+		fi
+		umount "$tmpmnt"
+	    fi
+	    echo "[OK]"
+	fi
+    done
+    rmdir "$tmpmnt" 2>/dev/null || true
+    return 0
+}
+
+# mount_storage_partitions
+#
+# /data partition
+#
+mount_storage_partitions() {
+    mount /dev/$DATADEV$DATAPART /data
+
+}
+
+# unmount_storage_partitions
+#
+unmount_storage_partitions() {
+    umount /data 2>/dev/null
+    return 0
+}
+
+# remove_installer_partition
+#
+remove_installer_partition() {
+    local rootfsdev="/dev/$ROOTFSDEVTYPE$ROOTFSDEVNUM"
+    if [ -z "${EMMC_PARTITIONS[INSTALLER]}" ]; then
+	echo "WARN: no INSTALLER partition found" >&2
+	return 0
+    fi
+    if ! sgdisk $rootfsdev --delete=${PARTINDEX[INSTALLER]} >/dev/null 2>&1; then
+	echo "ERR: could not delete INSTALLER partition" >&2
+	return 0
+    fi
+    # Use reboot -f since we've just blown away our running rootfs
+    reboot -f
+}
+
+# program_machine_id
+#
+program_machine_id() {
+    if tegra-fuse-tool -m >/dev/null 2>&1; then
+	return 0
+    fi
+    local midtmp=`mktemp -q -d /tmp/machid.XXXXXX`
+    mkdir "$midtmp/etc"
+    if ! systemd-machine-id-setup --root="$midtmp" > /dev/null 2>&1; then
+	echo "ERR: could not generate machine ID" >&2
+	rm -rf "$midtmp"
+	return 1
+    fi
+    local machid=`cat "$midtmp/etc/machine-id"`
+    rm -rf "$midtmp"
+    if ! tegra-fuse-tool -M "$machid"; then
+	echo "ERR: could not program machine ID into fuses" >&2
+	return 1
+    fi
+    local cmpid=`tegra-fuse-tool -m 2>/dev/null`
+    if [ "${cmpid^^}" != "${machid^^}" ]; then
+	echo "ERR: fuse mismatch with generated machine ID" >&2
+	return 1
+    fi
+    echo "Machine ID programmed: $cmpid"
+    return 0
+}
+
+# install_machine_id <root>
+#
+# Install our fuse-programmed machine ID
+# as systemd's /etc/machine-id in a just-installed
+# rootfs.
+#
+install_machine_id() {
+    local mptemp=`mktemp -q -d /tmp/mid-rootfs.XXXXXX`
+    local midtmp=`mktemp -q  /tmp/mid.XXXXXX`
+    mount "$1" "$mptemp" || return 1
+    if tegra-fuse-tool -m > "$midtmp" 2>/dev/null; then
+	if [ -e "$mptemp/etc/machine-id" ]; then
+	    if ! rm "$mptemp/etc/machine-id"; then
+		echo "ERR: could not replace $mptemp/etc/machine-id" >&2
+		rm "$midtmp"
+		umount "$mptemp"
+		rmdir "$mptemp"
+		return 1
+	    fi
+	fi
+	tr '[A-F]' '[a-f]' < "$midtmp" > "$mptemp/etc/machine-id"
+	chmod 644 "$mptemp/etc/machine-id"
+    else
+	echo "ERR: could not retrieve machine ID from fuses" >&2
+	rm -f "$midtmp"
+	umount "$mptemp"
+	rmdir "$mptemp"
+	return 1
+    fi
+    rm -f "$midtmp"
+    umount "$mptemp"
+    rmdir "$mptemp"
+    return 0
+}

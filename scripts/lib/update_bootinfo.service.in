@@ -1,0 +1,11 @@
+[Unit]
+Description=Record successful system boot
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=@SBINDIR@/tegra-bootinfo -b
+RemainAfterExit=yes
+
+[Install]
+WantedBy=finished-booting.target

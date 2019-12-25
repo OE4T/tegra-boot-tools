@@ -1,0 +1,109 @@
+#!/bin/bash
+# tegra-sysinstall: system installer
+#
+# SYNOPSIS
+#	tegra-sysinstall <rootfs-tarball-url> [<data-tarball-url>]
+#
+# Copyright (c) 2019, Matthew Madison
+
+INITIAL_SETUP=yes
+BOOTLOADER_UPDATES_SUPPORTED=yes
+INSTDIRTOP="/data"
+[ -d "$INSTDIRTOP" ] || mkdir -p "$INSTDIRTOP"
+
+. @TOOLSLIB@/tools-common
+
+cleanup_and_exit() {
+    if [ -n "$INSTDIR" -a -d "$INSTDIR" ]; then
+	rm -rf "$INSTDIR"
+    fi
+    unmount_storage_partitions
+    exit $1
+}
+
+if [ -z "$1" ]; then
+	echo "Missing URL argument for rootfs"
+	exit 1
+fi
+URL="$1"
+
+verify_device_availability || exit 1
+
+initialize_devices || exit 1
+
+format_partitions || exit 1
+
+mount_storage_partitions || exit 1
+
+program_machine_id || exit 1
+
+# From here down, make sure we clean up before exiting.
+
+INSTDIR=$(mktemp -q -d "$INSTDIRTOP/fwsetup.XXXXXX")
+download_file "$URL" "$INSTDIR" ROOTFS_TARBALL || cleanup_and_exit 1
+if [ -n "$2" ]; then
+    download_file "$2" "$INSTDIR" DATA_TARBALL || cleanup_and_exit 1
+else
+    DATA_TARBALL=
+fi
+
+package_preinstall || cleanup_and_exit 1
+
+if [ -n "$DATA_TARBALL" ]; then
+    echo "Populating /data from $DATA_TARBALL..."
+    update_datapart /data "$INSTDIR/$DATA_TARBALL" || cleanup_and_exit 1
+fi
+
+first_targetdev=
+for i in $INSTALLTO; do
+    targetdev="/dev/${ROOTFSDEV[$i]}${ROOTFSPART[$i]}"
+    echo "Installing rootfs to $targetdev..."
+    install_rootfs "$targetdev" $i $INSTDIR/$ROOTFS_TARBALL || cleanup_and_exit 1
+    install_machine_id "$targetdev" || cleanup_and_exit 1
+    sync && e2fsck -p "$targetdev" || cleanup_and_exit 1
+    [ -n "$first_targetdev" ] || first_targetdev="$targetdev"
+done
+
+if [ "$BOOTLOADER_UPDATES_SUPPORTED" = "yes" -a -n "$first_targetdev" ]; then
+    tmpmnt=$(mktemp -q -d /tmp/bl.XXXXXX)
+    if ! mount $first_targetdev $tmpmnt 2>/dev/null; then
+	echo "ERR: could not mount rootfs for bootloader update check" >&2
+	cleanup_and_exit 1
+    fi
+    if [ -e $tmpmnt/opt/ota_package/bl_update_payload ]; then
+	bootloadertext="${BOOTLOADER_NAME:-bootloader}"
+	echo "Updating $bootloadertext..."
+	update_bootloader $tmpmnt || cleanup_and_exit 1
+    fi
+    umount $tmpmnt
+    rmdir $tmpmnt 2>/dev/null
+fi
+
+# Final staging:
+#   - populate /data/var/lib with copy from rootfs
+#   - timestamp into /data/var/lib/timestamp
+dmount=$(mktemp -q -d /tmp/dstage.XXXXXX)
+if mount -L DATA $dmount 2>/dev/null ; then
+    if [ -n "$first_targetdev" ]; then
+	rmount=$(mktemp -q -d /tmp/dstage2.XXXXXX)
+	mount "$first_targetdev" $rmount
+	if [ -d ${rmount}/var/lib ]; then
+	    [ -d ${dmount}/var ] || mkdir ${dmount}/var
+	    cp -a ${rmount}/var/lib ${dmount}/var/
+	fi
+	umount $rmount
+	rmdir $rmount 2>/dev/null
+    fi
+    [ -d ${dmount}/var/lib ] || mkdir -p ${dmount}/var/lib
+    /bin/date -u "+%4Y%2m%2d%2H%2M%2S" > ${dmount}/var/lib/timestamp
+    umount $dmount
+    rmdir $dmount 2>/dev/null
+else
+    echo "ERR: could not mount /data partition for final staging" >&2
+    cleanup_and_exit 1
+fi
+
+echo "Installation complete.  Removing INSTALLER partition and rebooting..."
+remove_installer_partition
+
+cleanup_and_exit 0

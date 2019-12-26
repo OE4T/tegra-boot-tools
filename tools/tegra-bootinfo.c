@@ -95,8 +95,38 @@ static char *opthelp[] = {
 	"display this help text"
 };
 
+/*
+ * set_bootdev_writeable_status
+ */
 static int
-find_bootinfo (int *fdptr, struct device_info *devinfop)
+set_bootdev_writeable_status (int make_writeable)
+{
+	char pathname[64];
+	char buf[1];
+	int fd, is_writeable;
+
+	sprintf(pathname, "/sys/block/%s/force_ro", devinfo_dev + 5);
+	fd = open(pathname, O_RDWR);
+	if (fd < 0)
+		return 0;
+	if (read(fd, buf, sizeof(buf)) != sizeof(buf)) {
+		close(fd);
+		return 0;
+	}
+	make_writeable = !!make_writeable;
+	is_writeable = buf[0] == '0';
+	if (make_writeable && !is_writeable)
+		write(fd, "0", 1);
+	else if (!make_writeable && is_writeable)
+		write(fd, "1", 1);
+	close(fd);
+
+	return make_writeable != is_writeable;
+
+} /* set_bootdev_writeable_status */
+
+static int
+find_bootinfo (int *fdptr, struct device_info *devinfop, int readonly)
 {
 	struct device_info devinfo;
 	ssize_t n;
@@ -105,7 +135,7 @@ find_bootinfo (int *fdptr, struct device_info *devinfop)
 	if (devinfop == NULL)
 		devinfop = &devinfo;
 
-	fd = open(devinfo_dev, O_RDWR|O_DSYNC);
+	fd = open(devinfo_dev, (readonly ? O_RDONLY : O_RDWR|O_DSYNC));
 	if (fd < 0) {
 		perror(devinfo_dev);
 		return -2;
@@ -164,19 +194,23 @@ boot_devinfo_init(void)
 	unsigned long which = 0;
 	int fd;
 
-	if (find_bootinfo(&fd, &devinfo) == 0) {
+	set_bootdev_writeable_status(1);
+	if (find_bootinfo(&fd, &devinfo, 0) == 0) {
 		fprintf(stderr, "Device info already initialized\n");
 		close(fd);
+		set_bootdev_writeable_status(0);
 		return 0;
 	}
 	fd = open(devinfo_dev, O_RDWR|O_DSYNC);
 	if (fd < 0) {
 		perror(devinfo_dev);
+		set_bootdev_writeable_status(0);
 		return -2;
 	}
 	if (lseek(fd, devinfo_offset, SEEK_END) < 0) {
 		perror(devinfo_dev);
 		close(fd);
+		set_bootdev_writeable_status(0);
 		return -1;
 	}
 	memset(&devinfo, 0, sizeof(devinfo));
@@ -185,9 +219,11 @@ boot_devinfo_init(void)
 	if (write(fd, &devinfo, sizeof(devinfo)) < 0) {
 		perror("writing device info");
 		close(fd);
+		set_bootdev_writeable_status(0);
 		return -2;
 	}
 	close(fd);
+	set_bootdev_writeable_status(1);
 	return 0;
 
 } /* boot_devinfo_init */
@@ -198,12 +234,17 @@ boot_successful(void)
 	struct device_info devinfo;
 	int fd;
 
-	if (find_bootinfo(&fd, &devinfo) < 0) {
+	set_bootdev_writeable_status(1);
+	if (find_bootinfo(&fd, &devinfo, 0) < 0) {
 		fprintf(stderr, "Could not locate device info, initializing\n");
-		if (boot_devinfo_init() < 0)
+		if (boot_devinfo_init() < 0) {
+			set_bootdev_writeable_status(0);
 			return -2;
-		if (find_bootinfo(&fd, &devinfo) < 0)
+		}
+		if (find_bootinfo(&fd, &devinfo, 0) < 0) {
+			set_bootdev_writeable_status(0);
 			return -2;
+		}
 	}
 
 	devinfo.boot_in_progress = 0;
@@ -213,9 +254,11 @@ boot_successful(void)
 	if (write(fd, &devinfo, sizeof(devinfo)) < 0) {
 		perror("writing boot info");
 		close(fd);
+		set_bootdev_writeable_status(0);
 		return -2;
 	}
 	close(fd);
+	set_bootdev_writeable_status(0);
 	return 0;
 
 } /* boot_successful */
@@ -226,13 +269,16 @@ boot_check_status(void)
 	struct device_info devinfo;
 	int fd, rc = 0;
 
-	if (find_bootinfo(&fd, &devinfo) < 0) {
+	set_bootdev_writeable_status(1);
+	if (find_bootinfo(&fd, &devinfo, 0) < 0) {
 		fprintf(stderr, "Could not locate device info, initializing\n");
 		rc = boot_devinfo_init();
 		if (rc == 0)
-			rc = find_bootinfo(&fd, &devinfo);
-		if (rc < 0)
+			rc = find_bootinfo(&fd, &devinfo, 0);
+		if (rc < 0) {
+			set_bootdev_writeable_status(0);
 			return rc;
+		}
 	}
 
 	if (devinfo.boot_in_progress) {
@@ -251,6 +297,7 @@ boot_check_status(void)
 		rc = -2;
 	}
 	close(fd);
+	set_bootdev_writeable_status(0);
 	return rc;
 
 } /* boot_check_status */
@@ -259,7 +306,7 @@ static int
 show_bootinfo(void) {
 	struct device_info devinfo;
 
-	if (find_bootinfo(NULL, &devinfo) < 0) {
+	if (find_bootinfo(NULL, &devinfo, 1) < 0) {
 		fprintf(stderr, "Could not locate device info\n");
 		return -2;
 	}

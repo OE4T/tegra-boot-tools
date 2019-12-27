@@ -368,7 +368,7 @@ create_luks_partitions() {
 	echo -n "Encrypting $luksdev($name)..."
 	[ -n "$realname" -a -n "$luksdev" -a -b "$luksdev" ] || continue
 	if ! cat "$ppdir/passphrase" | cryptsetup --type luks --cipher aes-xts-plain64 --hash sha256 \
-						  --use-random --key-file - luksFormat $luksdev 2>/dev/null; then
+						  --use-random --key-file - luksFormat $luksdev >/dev/null 2>&1; then
 	    echo "[FAIL]"
 	    return 1
 	fi
@@ -541,6 +541,23 @@ initialize_devices() {
 
     for part in APP APP_b DATA; do
 	if [ -z "${CRYPT_PARTITIONS[$part]}" -a -z "${EMMC_PARTITIONS[crypt-$part]}" ]; then
+	    if [ "$part" = "DATA" ]; then
+		local partdev="/dev/${EMMC_PARTITIONS[$part]}"
+		local datatmp=$(mktemp -q -d /tmp/datasave.XXXXXX)
+		if mount $partdev $datatmp >/dev/null 2>&1; then
+		    echo -n "Saving $part contents..."
+		    if ! tar -C "$datatmp" --xattrs --xattrs-include="*" -c -z -f /tmp/${part}.tar.gz . 2>/dev/null; then
+			echo "[FAILED]"
+			umount "$datatmp"
+			rm -f /tmp/${part}.tar.gz
+			return 1
+		    else
+			echo "[OK]"
+			umount "$datatmp"
+		    fi
+		    rmdir "$datatmp"
+		fi
+	    fi
 	    echo -n "Renaming $part to crypt-$part..."
 	    if sgdisk $rootfsdev --change-name=${PARTINDEX[$part]}:crypt-$part >/dev/null 2>&1; then
 		echo "[OK]"

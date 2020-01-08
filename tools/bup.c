@@ -55,6 +55,11 @@ struct bup_context_s {
 static const uint8_t bup_magic[16] = "NVIDIA__BLOB__V2";
 static const uint32_t bup_version = 0x00020000;
 
+struct specinfo_s {
+	const char *start;
+	size_t len;
+};
+
 static int
 load_configuration (bup_context_t *ctx)
 {
@@ -263,6 +268,31 @@ bup_boot_device (bup_context_t *ctx)
 	return ctx->bootdev;
 }
 
+/*
+ * Specs are of the form
+ *  BOARDID-FAB-BOARDSKU-BOARDREV-FUSELEVEL-CHIPREV-MACHINE-BOOTDEV
+ */
+static int
+spec_split (const char *spec, struct specinfo_s *elements, int max_elements)
+{
+	const char *cp, *hyp;
+	int i;
+
+	for (cp = spec, i = 0; i < max_elements; i += 1) {
+		elements[i].start = cp;
+		hyp = strchr(cp, '-');
+		if (hyp == NULL) {
+			elements[i].len = strlen(cp);
+			return i + 1;
+		}
+		elements[i].len = hyp - cp;
+		cp = hyp + 1;
+	}
+
+	return i;
+
+}
+
 int
 bup_enumerate_entries (bup_context_t *ctx, void **iterctx, const char **partname,
 		       off_t *offset, size_t *length, unsigned int *version)
@@ -270,14 +300,51 @@ bup_enumerate_entries (bup_context_t *ctx, void **iterctx, const char **partname
 	unsigned int i;
 	uintptr_t start;
 	struct bup_entry_s *ent;
+	struct specinfo_s sysspecinfo[32], entspecinfo[32];
+	int sysinfocount, entinfocount;
 
+	sysinfocount = spec_split(ctx->our_spec, sysspecinfo, sizeof(sysspecinfo)/sizeof(sysspecinfo[0]));
 	start = (uintptr_t)(*iterctx);
 	for (i = start; i < ctx->entry_count; i++) {
+		int j;
 		ent = &ctx->entries[i];
 		if (ent->op_mode == OP_MODE_PREPRODUCTION)
 			continue;
-		if (ent->spec[0] != '\0' && strcmp(ent->spec, ctx->our_spec) != 0)
+		/*
+		 * null spec is wildcard
+		 */
+		if (ent->spec[0] == '\0')
+			break;
+		entinfocount = spec_split(ent->spec, entspecinfo, sizeof(entspecinfo)/sizeof(entspecinfo[0]));
+		/*
+		 * element count must match
+		 */
+		if (sysinfocount != entinfocount)
 			continue;
+		for (j = 0; j < sysinfocount; j++) {
+			struct specinfo_s *e = &entspecinfo[j];
+			struct specinfo_s *s = &sysspecinfo[j];
+			/*
+			 * null element is wildcard, otherwise
+			 * element must match
+			 */
+			if (e->len == 0 || s->len == 0)
+				continue;
+			/*
+			 * 'internal' in sys spec matches mmcblk0p<n> in
+			 * bup entry
+			 */
+			if (s->len == 8 && memcmp(s->start, "internal", 8) == 0 &&
+			    e->len > 8 && memcmp(e->start, "mmcblk0p", 8) == 0)
+				continue;
+			/*
+			 * otherwise text must match exactly
+			 */
+			if (e->len != s->len || memcmp(e->start, s->start, s->len) != 0)
+				break;
+		}
+		if (j < sysinfocount)
+			continue; // not everything matched
 		break;
 	}
 	if (i >= ctx->entry_count) {

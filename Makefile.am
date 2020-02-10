@@ -12,6 +12,9 @@ prefix = /usr
 exec_prefix = /usr
 datadir = $(prefix)/share
 sbindir = $(exec_prefix)/sbin
+systemdsystemunitdir = @systemdsystemunitdir@
+
+EXTRA_DIST = units/finished-booting.target units/update_bootinfo_service.in
 
 bin_PROGRAMS = tegra-bootloader-update
 tegra_bootloader_update_SOURCES = tegra-bootloader-update.c gpt.c bup.c
@@ -21,3 +24,5 @@ tegra_bootloader_update_LDFLAGS = $(ZLIB_LDFLAGS)
 
 sbin_PROGRAMS = tegra-bootinfo
 tegra_bootinfo_SOURCES = tegra-bootinfo.c
+
+systemdsystemunit_DATA = units/finished-booting.target units/update_bootinfo.service

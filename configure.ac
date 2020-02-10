@@ -33,7 +33,7 @@ AS_IF([test "x$with_systemdsystemunitdir" = "xcheck"],
     [with_systemdsystemunitdir=`$PKG_CONFIG --variable systemdsystemunitdir systemd`])
 AC_SUBST([systemdsystemunitdir], [$with_systemdsystemunitdir])
 
-AC_CONFIG_FILES(Makefile scripts/Makefile tools/Makefile)
+AC_CONFIG_FILES(Makefile units/update_bootinfo.service)
 AC_PROG_CC
 AC_PROG_CC_C_O
 AC_OUTPUT

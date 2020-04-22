@@ -52,8 +52,8 @@ struct update_entry_s {
 	size_t length;
 };
 
-static struct update_entry_s redundant_entries[32];
-static struct update_entry_s nonredundant_entries[32];
+static struct update_entry_s redundant_entries[64];
+static struct update_entry_s nonredundant_entries[64];
 static unsigned int redundant_entry_count;
 static unsigned int nonredundant_entry_count;
 static size_t contentbuf_size;
@@ -297,6 +297,11 @@ main (int argc, char * const argv[])
 			part_b = gpt_find_by_name(gptctx, partname_b);
 			if (initialize) {
 				if (part_b != NULL) {
+					if (redundant_entry_count >= sizeof(redundant_entries)/sizeof(redundant_entries[0])) {
+						fprintf(stderr, "too many partitions to initialize\n");
+						ret = 1;
+						goto depart;
+					}
 					redundant_entries[redundant_entry_count] = updent;
 					redundant_entries[redundant_entry_count].part = part;
 					redundant_entry_count += 1;
@@ -305,11 +310,21 @@ main (int argc, char * const argv[])
 					redundant_entries[redundant_entry_count].part = part_b;
 					redundant_entry_count += 1;
 				} else {
+					if (nonredundant_entry_count >= sizeof(nonredundant_entries)/sizeof(nonredundant_entries[0])) {
+						fprintf(stderr, "too many (non-redundant) partitions to initialize\n");
+						ret = 1;
+						goto depart;
+					}
 					nonredundant_entries[nonredundant_entry_count] = updent;
 					nonredundant_entries[nonredundant_entry_count].part = part;
 					nonredundant_entry_count += 1;
 				}
 			} else if (part_b != NULL) {
+				if (redundant_entry_count >= sizeof(redundant_entries)/sizeof(redundant_entries[0])) {
+					fprintf(stderr, "too many partitions to update\n");
+					ret = 1;
+					goto depart;
+				}
 				redundant_entries[redundant_entry_count] = updent;
 				strcpy(redundant_entries[redundant_entry_count].partname, (*suffix == '\0' ? partname : partname_b));
 				redundant_entries[redundant_entry_count].part = (*suffix == '\0' ? part : part_b);

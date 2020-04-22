@@ -3,7 +3,7 @@
  *
  * Functions for parsing a Tegra bootloader update payload.
  *
- * Copyright (c) 2019, Matthew Madison
+ * Copyright (c) 2019, 2020 Matthew Madison
  *
  */
 #include <stdio.h>
@@ -67,8 +67,12 @@ load_configuration (bup_context_t *ctx)
 	ssize_t n;
 	struct stat st;
 	char *start, *line, *lineend;
+	char *conffile;
 
-	fd = open("/etc/nv_boot_control.conf", O_RDONLY);
+	conffile = getenv("NV_BOOT_CONTROL");
+	if (conffile == NULL)
+		conffile = "/etc/nv_boot_control.conf";
+	fd = open(conffile, O_RDONLY);
 	if (fd < 0)
 		return -1;
 	if (fstat(fd, &st) != 0) {

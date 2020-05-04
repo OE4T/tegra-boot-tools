@@ -223,7 +223,7 @@ boot_devinfo_init(void)
 		return -2;
 	}
 	close(fd);
-	set_bootdev_writeable_status(1);
+	set_bootdev_writeable_status(0);
 	return 0;
 
 } /* boot_devinfo_init */

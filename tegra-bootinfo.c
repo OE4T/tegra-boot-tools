@@ -199,7 +199,7 @@ parse_vars (struct devinfo_context *ctx)
 		     ctx->varsize = 0,
 		     last = NULL;
 	     remain > 0 && *cp != '\0';
-	     remain -= varbytes) {
+	     cp += varbytes, remain -= varbytes) {
 		for (endp = cp + 1, varbytes = 1;
 		     varbytes < remain && *endp != '\0';
 		     endp++, varbytes++);
@@ -378,8 +378,8 @@ find_bootinfo (int readonly, struct devinfo_context **ctxp)
 			ctx->current = 1;
 		else
 			ctx->current = 0;
-		memcpy(&ctx->curinfo, ctx->infobuf[ctx->current], sizeof(ctx->curinfo));
 	}
+	memcpy(&ctx->curinfo, ctx->infobuf[ctx->current], sizeof(ctx->curinfo));
 	if (parse_vars(ctx) < 0) {
 		/* internal error ? */
 		ctx->readonly = 1;
@@ -649,7 +649,7 @@ show_bootvar (const char *name)
 	close_bootinfo(ctx);
 	if (!found) {
 		fprintf(stderr, "not found: %s\n", name);
-		return -1;
+		return 1;
 	}
 	return 0;
 
@@ -666,39 +666,89 @@ set_bootvar (const char *name, const char *value)
 	struct devinfo_context *ctx;
 	struct info_var *var, *prev;
 
+	/*
+	 * Allow 'name=value' as a single argument
+	 * Or 'name=' to unset a variable
+	 */
+	if (value == NULL) {
+		char *cp = strchr(name, '=');
+		if (cp != NULL) {
+			if (cp == name) {
+				fprintf(stderr, "invalid variable name\n");
+				return 1;
+			}
+			*cp = '\0';
+			value = cp + 1;
+			if (*value == '\0')
+				value = NULL;
+		}
+	}
+	/*
+	 * Variable names must begin with a letter
+	 * and can contain letters, digits, or underscores.
+	 */
+	if (!isalpha(*name)) {
+		fprintf(stderr, "invalid variable name\n");
+		return 1;
+	} else {
+		char *cp;
+		for (cp = name + 1; *cp != '\0'; cp++) {
+			if (!(*cp == '_' || isalnum(*cp))) {
+				fprintf(stderr, "invalid variable name\n");
+				return 1;
+			}
+		}
+	}
+	/*
+	 * Values may only contain printable characters
+	 */
+	if (value != NULL) {
+		char *cp;
+		for (cp = value; *cp != '\0'; cp++) {
+			if (!isprint(*cp)) {
+				fprintf(stderr, "invalid value for variable\n");
+				return 1;
+			}
+		}
+	}
+	set_bootdev_writeable_status(1);
 	if (find_bootinfo(0, &ctx) < 0) {
 		fprintf(stderr, "Could not locate device info\n");
+		set_bootdev_writeable_status(0);
 		return -2;
 	}
 
 	if (strlen(name) > DEVINFO_BLOCK_SIZE-DEVINFO_HDR_SIZE) {
 		fprintf(stderr, "error: variable name too long\n");
 		close_bootinfo(ctx);
-		return -1;
-		strcpy(ctx->namebuf, name);
+		set_bootdev_writeable_status(0);
+		return 1;
 	}
 
+	strcpy(ctx->namebuf, name);
 	if (value != NULL) {
 		size_t s = strlen(name) + strlen(value) + 2;
 		if (ctx->varsize + s > DEVINFO_BLOCK_SIZE-DEVINFO_HDR_SIZE) {
 			fprintf(stderr, "error: insufficient space for variable storage\n");
 			close_bootinfo(ctx);
-			return -1;
+			set_bootdev_writeable_status(0);
+			return 1;
 		}
 		strcpy(ctx->valuebuf, value);
 	}
 	for (var = ctx->vars, prev = NULL; var != NULL && strcmp(name, var->name) != 0; prev = var, var = var->next);
 	if (var == NULL) {
 		if (value == NULL) {
-			/* Deleting variable that isn't there - no error */
+			fprintf(stderr, "not found: %s\n", name);
 			close_bootinfo(ctx);
-			return 0;
+			return 1;
 		}
 		var = calloc(1, sizeof(struct info_var));
 		if (var == NULL) {
 			perror("calloc");
 			close_bootinfo(ctx);
-			return -1;
+			set_bootdev_writeable_status(0);
+			return 1;
 		}
 		var->name = ctx->namebuf;
 		var->value = ctx->valuebuf;
@@ -711,7 +761,10 @@ set_bootvar (const char *name, const char *value)
 		}
 	} else if (value == NULL) {
 		/* Deleting found variable */
-		prev->next = var->next;
+		if (prev == NULL)
+			ctx->vars = var->next;
+		else
+			prev->next = var->next;
 		free(var);
 	} else
 		/* Changing value of found variable */
@@ -720,9 +773,11 @@ set_bootvar (const char *name, const char *value)
 	if (update_bootinfo(ctx) < 0) {
 		fprintf(stderr, "could not update variables\n");
 		close_bootinfo(ctx);
-		return -1;
+		set_bootdev_writeable_status(0);
+		return 1;
 	}
 	close_bootinfo(ctx);
+	set_bootdev_writeable_status(0);
 	return 0;
 
 } /* set_bootvar */

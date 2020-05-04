@@ -1,6 +1,6 @@
 # Tegra boot/update tools
 #
-# Copyright (c) 2019, Matthew Madison
+# Copyright (c) 2019, 2020 Matthew Madison
 #
 
 AUTOMAKE_OPTIONS = subdir-objects foreign
@@ -24,5 +24,8 @@ tegra_bootloader_update_LDFLAGS = $(ZLIB_LDFLAGS)
 
 sbin_PROGRAMS = tegra-bootinfo
 tegra_bootinfo_SOURCES = tegra-bootinfo.c
+tegra_bootinfo_CFLAGS = $(ZLIB_CFLAGS)
+tegra_bootinfo_LDADD = $(ZLIB_LIBS)
+tegra_bootinfo_LDFLAGS = $(ZLIB_LDFLAGS)
 
 systemdsystemunit_DATA = units/finished-booting.target units/update_bootinfo.service

@@ -86,7 +86,7 @@ set_bootdev_writeable_status (const char *bootdev, int make_writeable)
 {
 	char pathname[64];
 	char buf[1];
-	int fd, is_writeable;
+	int fd, is_writeable, rc = 0;
 
 	if (bootdev == NULL)
 		return 0;
@@ -103,10 +103,15 @@ set_bootdev_writeable_status (const char *bootdev, int make_writeable)
 	make_writeable = !!make_writeable;
 	is_writeable = buf[0] == '0';
 	if (make_writeable && !is_writeable)
-		write(fd, "0", 1);
+		if (write(fd, "0", 1) != 1)
+			rc = 1;
 	else if (!make_writeable && is_writeable)
-		write(fd, "1", 1);
+		if (write(fd, "1", 1) != 1)
+			rc = 1;
 	close(fd);
+
+	if (rc)
+		fprintf(stderr, "warning: could not change boot device write status\n");
 
 	return make_writeable != is_writeable;
 

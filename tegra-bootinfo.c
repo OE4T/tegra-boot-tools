@@ -58,7 +58,6 @@
 #include <inttypes.h>
 #include <ctype.h>
 #include <sys/types.h>
-#include <sys/stat.h>
 #include <zlib.h>
 #include "config.h"
 
@@ -95,12 +94,20 @@ struct device_info {
 } __attribute__((packed));
 #define FLAG_BOOT_IN_PROGRESS	(1<<0)
 #define DEVINFO_HDR_SIZE sizeof(struct device_info)
+#define VARSPACE_SIZE (DEVINFO_BLOCK_SIZE+EXTENSION_SIZE-(DEVINFO_HDR_SIZE+sizeof(uint32_t)))
+/*
+ * Maximum size for a variable value is all of the variable space minus two bytes
+ * for null terminators (for name and value) and one byte for a name, plus one
+ * byte for the null character terminating the variable list.
+ */
+#define MAX_VALUE_SIZE (VARSPACE_SIZE-4)
 
 struct info_var {
 	struct info_var *next;
 	char *name;
 	char *value;
 };
+
 
 struct devinfo_context {
 	int fd;
@@ -110,10 +117,10 @@ struct devinfo_context {
 	struct device_info curinfo;
 	struct info_var *vars;
 	size_t varsize;
-	uint8_t infobuf[2][DEVINFO_BLOCK_SIZE+(MAX_EXTENSION_SECTORS*512)];
+	uint8_t infobuf[2][DEVINFO_BLOCK_SIZE+EXTENSION_SIZE];
 	/* storage for setting variables */
 	char namebuf[DEVINFO_BLOCK_SIZE];
-	char valuebuf[DEVINFO_BLOCK_SIZE+EXTENSION_SIZE-sizeof(uint32_t)];
+	char valuebuf[MAX_VALUE_SIZE];
 };
 
 /*
@@ -169,18 +176,24 @@ static struct option options[] = {
 	{ "check-status",	no_argument,		0, 'c' },
 	{ "initialize",		no_argument,		0, 'I' },
 	{ "show",		no_argument,		0, 's' },
+	{ "omit-name",		no_argument,		0, 'n' },
+	{ "from-file",		required_argument,	0, 'f' },
+	{ "force-initialize",	no_argument,		0, 'F' },
 	{ "get-variable",	no_argument,		0, 'v' },
 	{ "set-variable",	no_argument,		0, 'V' },
 	{ "help",		no_argument,		0, 'h' },
 	{ 0,			0,			0, 0   }
 };
-static const char *shortopts = ":bcIsvVh";
+static const char *shortopts = ":bcIsnf:FvVh";
 
 static char *optarghelp[] = {
 	"--boot-success       ",
 	"--check-status       ",
 	"--initialize         ",
 	"--show               ",
+	"--omit-name          ",
+	"--from-file FILE     ",
+	"--force-initialize   ",
 	"--get-variable       ",
 	"--set-variable       ",
 	"--help               ",
@@ -191,6 +204,9 @@ static char *opthelp[] = {
 	"increment boot counter and check it is under limit",
 	"initialize the device info area",
 	"show boot counter information",
+	"omit variable name in output (for use with --get-variable)",
+	"take variable value from FILE (for use with --set-variable)",
+	"force initialization even if bootinfo already initialized (for use with --initialize)",
 	"get the value of a stored variable by name, list all if no name specified",
 	"set the value of a stored variable (delete if no value)",
 	"display this help text"
@@ -248,7 +264,7 @@ parse_vars (struct devinfo_context *ctx)
 {
 	struct info_var *var, *last;
 	char *cp, *endp, *valp;
-	size_t remain, varbytes;
+	ssize_t remain, varbytes;
 
 	ctx->vars = NULL;
 	if (ctx->current < 0) {
@@ -256,7 +272,7 @@ parse_vars (struct devinfo_context *ctx)
 		return -1;
 	}
 	for (cp = (char *)(ctx->infobuf[ctx->current] + DEVINFO_HDR_SIZE),
-		     remain = (DEVINFO_BLOCK_SIZE+EXTENSION_SIZE-sizeof(uint32_t)) - DEVINFO_HDR_SIZE,
+		     remain = sizeof(ctx->infobuf[ctx->current]) - (DEVINFO_HDR_SIZE+sizeof(uint32_t)),
 		     ctx->varsize = 0,
 		     last = NULL;
 	     remain > 0 && *cp != '\0';
@@ -308,7 +324,7 @@ pack_vars (struct devinfo_context *ctx, int idx)
 	if (ctx->vars == NULL)
 		return 0;
 	for (var = ctx->vars, cp = (char *)(ctx->infobuf[idx] + DEVINFO_HDR_SIZE),
-		     remain = (DEVINFO_BLOCK_SIZE+EXTENSION_SIZE-sizeof(uint32_t)) - DEVINFO_HDR_SIZE;
+		     remain = sizeof(ctx->infobuf[ctx->current]) - (DEVINFO_HDR_SIZE+sizeof(uint32_t)+1);
 	     var != NULL && remain > 0;
 	     var = var->next) {
 		nlen = strlen(var->name) + 1;
@@ -322,10 +338,11 @@ pack_vars (struct devinfo_context *ctx, int idx)
 		memcpy(cp, var->value, vlen);
 		cp += vlen; remain -= vlen;
 	}
-	if (var != NULL) {
+	if (var != NULL || remain == 0) {
 		fprintf(stderr, "error: variables list too large\n");
 		return -1;
 	}
+	*cp = '\0';
 
 	return 0;
 
@@ -598,39 +615,64 @@ print_usage (void)
 } /* print_usage */
 
 static int
-boot_devinfo_init(void)
+boot_devinfo_init(int force_init)
 {
+	int fd, i;
+	ssize_t n, cnt;
 	struct devinfo_context *ctx;
-	struct info_var *var, *prev;
+	static uint8_t buf[DEVINFO_BLOCK_SIZE + EXTENSION_SIZE];
 
-	set_bootdev_writeable_status(1);
-	if (find_bootinfo(0, &ctx) == 0 && ctx != NULL & !ctx->readonly) {
-		fprintf(stderr, "Device info already initialized\n");
+	if (find_bootinfo(0, &ctx) == 0 && ctx != NULL) {
+		if (!ctx->readonly && !force_init) {
+			fprintf(stderr, "Device info already initialized\n");
+			close_bootinfo(ctx);
+			return 0;
+		}
 		close_bootinfo(ctx);
+	}
+
+	fd = open(devinfo_dev, O_RDWR|O_DSYNC);
+	if (fd < 0) {
+		perror(devinfo_dev);
 		set_bootdev_writeable_status(0);
-		return 0;
+		return -1;
 	}
+	for (i = 0; i < 2; i++) {
+		if (lseek(fd, devinfo_offset[i], SEEK_END) < 0)
+			break;
+		for (n = 0; n < DEVINFO_BLOCK_SIZE; n += cnt) {
+			cnt = write(fd, buf+n, DEVINFO_BLOCK_SIZE-n);
+			if (cnt < 0)
+				break;
+		}
+		if (n < DEVINFO_BLOCK_SIZE)
+			break;
+		if (lseek(fd, extension_offset[i], SEEK_END) < 0)
+			break;
+		for (n = 0; n < EXTENSION_SIZE; n += cnt) {
+			cnt = write(fd, buf+DEVINFO_BLOCK_SIZE+n, EXTENSION_SIZE-n);
+			if (cnt < 0)
+				break;
+		}
+		if (n < EXTENSION_SIZE)
+			break;
+	}
+	if (i < 2) {
+		fprintf(stderr, "could not initialize bootinfo areas\n");
+		close(fd);
+		return -1;
+	}
+
+	ctx = calloc(1, sizeof(struct devinfo_context));
 	if (ctx == NULL) {
-		ctx = calloc(1, sizeof(struct devinfo_context));
-		if (ctx == NULL) {
-			perror("calloc");
-			set_bootdev_writeable_status(0);
-			return -1;
-		}
-		ctx->fd = open(devinfo_dev, O_RDWR|O_DSYNC);
-		if (ctx->fd < 0) {
-			perror(devinfo_dev);
-			free(ctx);
-			set_bootdev_writeable_status(0);
-			return -1;
-		}
-		ctx->current = -1;
+		perror("calloc");
+		return -1;
 	}
-	ctx->readonly = 0;
+	ctx->fd = fd;
+	ctx->current = -1;
 	if (update_bootinfo(ctx) < 0)
 		return -1;
 	close_bootinfo(ctx);
-	set_bootdev_writeable_status(0);
 	return 0;
 
 } /* boot_devinfo_init */
@@ -643,7 +685,7 @@ boot_successful(void)
 	set_bootdev_writeable_status(1);
 	if (find_bootinfo(0, &ctx) < 0) {
 		fprintf(stderr, "Could not locate device info, initializing\n");
-		if (boot_devinfo_init() < 0) {
+		if (boot_devinfo_init(1) < 0) {
 			close_bootinfo(ctx);
 			set_bootdev_writeable_status(0);
 			return -2;
@@ -682,7 +724,7 @@ boot_check_status(void)
 		fprintf(stderr, "Could not locate device info, initializing\n");
 		close_bootinfo(ctx);
 		ctx = NULL;
-		rc = boot_devinfo_init();
+		rc = boot_devinfo_init(1);
 		if (rc == 0)
 			rc = find_bootinfo(0, &ctx);
 		if (rc < 0) {
@@ -747,7 +789,7 @@ show_bootinfo(void) {
  * all var=value settings if varname == NULL
  */
 int
-show_bootvar (const char *name)
+show_bootvar (const char *name, int omitname)
 {
 	struct devinfo_context *ctx;
 	struct info_var *var;
@@ -760,7 +802,10 @@ show_bootvar (const char *name)
 	for (var = ctx->vars; var != NULL; var = var->next) {
 		if (name == NULL || strcmp(name, var->name) == 0) {
 			found = 1;
-			printf("%s=%s\n", var->name, var->value);
+			if (omitname)
+				printf("%s\n", var->value);
+			else
+				printf("%s=%s\n", var->name, var->value);
 			if (name != NULL)
 				break;
 		}
@@ -780,10 +825,57 @@ show_bootvar (const char *name)
  * Sets or deletes a variable.
  */
 int
-set_bootvar (const char *name, const char *value)
+set_bootvar (const char *name, const char *value, char *inputfile)
 {
 	struct devinfo_context *ctx;
 	struct info_var *var, *prev;
+	static char valuebuf[MAX_VALUE_SIZE];
+
+	if (inputfile != NULL) {
+		FILE *fp;
+		struct stat st;
+		ssize_t n, cnt;
+
+		if ((value != NULL) || strchr(name, '=') != NULL) {
+			fprintf(stderr, "cannot specify both value and input file\n");
+			return 1;
+		}
+		if (strcmp(inputfile, "-") == 0)
+			fp = stdin;
+		else {
+			fp = fopen(inputfile, "r");
+			if (fp == NULL) {
+				perror(inputfile);
+				return 1;
+			}
+		}
+		for (n = 0; n < sizeof(valuebuf); n += cnt) {
+			cnt = fread(valuebuf + n, sizeof(char), sizeof(valuebuf)-n, fp);
+			if (cnt < sizeof(valuebuf)-n) {
+				if (feof(fp)) {
+					n += cnt;
+					break;
+				}
+				fprintf(stderr, "error reading %s\n",
+					(fp == stdin ? "input" : inputfile));
+				if (fp != stdin)
+					fclose(fp);
+				return 1;
+			}
+		}
+		if (fp != stdin)
+			fclose(fp);
+		if (n >= sizeof(valuebuf)-1) {
+			fprintf(stderr, "input value too large\n");
+			return 1;
+		}
+		valuebuf[n] = '\0';
+		if (strlen(valuebuf) != n) {
+			fprintf(stderr, "null character in input value not allowed\n");
+			return 1;
+		}
+		value = valuebuf;
+	}
 
 	/*
 	 * Allow 'name=value' as a single argument
@@ -798,10 +890,16 @@ set_bootvar (const char *name, const char *value)
 			}
 			*cp = '\0';
 			value = cp + 1;
-			if (*value == '\0')
-				value = NULL;
 		}
 	}
+	/*
+	 * Now that the input/parsing of names and values is complete,
+	 * check for a null (0-length) value and just set value to NULL
+	 * to indicate that we want to delete the variable in that
+	 * case.
+	 */
+	if (value != NULL && *value == '\0')
+		value = NULL;
 	/*
 	 * Variable names must begin with a letter
 	 * and can contain letters, digits, or underscores.
@@ -849,7 +947,7 @@ set_bootvar (const char *name, const char *value)
 		size_t vallen = strlen(value);
 		size_t s = strlen(name) + vallen + 2;
 		if (vallen >= sizeof(ctx->valuebuf) ||
-		    ctx->varsize + s > DEVINFO_BLOCK_SIZE+EXTENSION_SIZE-DEVINFO_HDR_SIZE-sizeof(uint32_t)) {
+		    ctx->varsize + s > sizeof(ctx->valuebuf)) {
 			fprintf(stderr, "error: insufficient space for variable storage\n");
 			close_bootinfo(ctx);
 			set_bootdev_writeable_status(0);
@@ -911,46 +1009,86 @@ main (int argc, char * const argv[])
 {
 
 	int c, which, ret;
+	int omitname = 0;
+	int force_init = 0;
+	char *inputfile = NULL;
+	enum {
+		nocmd,
+		showvar,
+		setvar,
+		init,
+	} cmd = nocmd;
 
 	if (argc < 2) {
 		print_usage();
 		return 1;
 	}
 
-	c = getopt_long_only(argc, argv, shortopts, options, &which);
-	if (c == -1) {
-		perror("getopt");
-		print_usage();
-		return 1;
-	}
 
-	switch (c) {
-	case 'h':
-		print_usage();
-		return 0;
-	case 'b':
-		return boot_successful();
-	case 'c':
-		return boot_check_status();
-	case 'I':
-		return boot_devinfo_init();
-	case 's':
-		return show_bootinfo();
-	case 'v':
+	while ((c = getopt_long_only(argc, argv, shortopts, options, &which)) != -1) {
+
+		switch (c) {
+		case 'h':
+			print_usage();
+			return 0;
+		case 'b':
+			return boot_successful();
+		case 'c':
+			return boot_check_status();
+		case 'I':
+			cmd = init;
+			break;
+		case 's':
+			return show_bootinfo();
+		case 'n':
+			omitname = 1;
+			break;
+	        case 'f':
+			inputfile = strdup(optarg);
+			break;
+		case 'F':
+			force_init = 1;
+			break;
+		case 'v':
+		case 'V':
+			if (cmd != nocmd) {
+				fprintf(stderr, "Error: only one of -v/-V permitted\n");
+				print_usage();
+				return 1;
+			}
+			cmd = (c == 'v' ? showvar : setvar);
+			break;
+		default:
+			fprintf(stderr, "Error: unrecognized option\n");
+			print_usage();
+			return 1;
+		} /* switch (c) */
+
+	} /* while getopt */
+
+	switch (cmd) {
+	case init:
+		set_bootdev_writeable_status(1);
+		ret = boot_devinfo_init(force_init);
+		set_bootdev_writeable_status(0);
+		return ret;
+	case showvar:
 		if (optind >= argc)
-			return show_bootvar(NULL);
-		return show_bootvar(argv[optind]);
-	case 'V':
+			return show_bootvar(NULL, 0);
+		return show_bootvar(argv[optind], omitname);
+	case setvar:
 		if (optind >= argc) {
 			fprintf(stderr, "Error: missing variable name\n");
 			print_usage();
 			return 1;
 		}
-		return set_bootvar(argv[optind], (optind < argc - 1 ? argv[optind+1] : NULL));
+		return set_bootvar(argv[optind], (optind < argc - 1 ? argv[optind+1] : NULL), inputfile);
 	default:
-		fprintf(stderr, "Error: unrecognized option\n");
-		print_usage();
-		return 1;
+		break;
 	}
+
+
+	print_usage();
+	return 1;
 
 } /* main */

@@ -31,7 +31,20 @@
  * option to signal that we successfully completed
  * the full boot sequence.
  *
- * Copyright (c) 2019, Matthew Madison
+ * In addition to tracking boot status, this program
+ * maintains some persistent storage for named
+ * variables, similar to U-Boot's environment variable
+ * store.
+ *
+ * WARNING: if you use this program in conjunction with
+ * U-Boot, note that by default, U-Boot's environment
+ * variable space on the Jetson platforms conflicts
+ * with the space allocation here (as well as the
+ * pseudo-GPT used by NVIDIA).  You must customize
+ * your U-Boot build and this tool's build to ensure
+ * there is no conflict.
+ *
+ * Copyright (c) 2019-2020, Matthew Madison
  */
 
 #include <stdio.h>
@@ -43,18 +56,32 @@
 #include <endian.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <ctype.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <zlib.h>
+#include "config.h"
 
 static const char DEVICE_MAGIC[8] = {'B', 'O', 'O', 'T', 'I', 'N', 'F', 'O'};
 #define DEVICE_MAGIC_SIZE sizeof(DEVICE_MAGIC)
 
-static const uint16_t DEVINFO_VERSION_OLD = 1;
-static const uint16_t DEVINFO_VERSION_CURRENT = 2;
+static const uint16_t DEVINFO_VERSION_OLDER = 1;
+static const uint16_t DEVINFO_VERSION_OLD = 2;
+static const uint16_t DEVINFO_VERSION_CURRENT = 3;
+
+#ifndef EXTENSION_SECTOR_COUNT
+#define EXTENSION_SECTOR_COUNT 1
+#endif
+
+#define MAX_EXTENSION_SECTORS 511
+
+#if (EXTENSION_SECTOR_COUNT == 0) || (EXTENSION_SECTOR_COUNT > MAX_EXTENSION_SECTORS)
+#error "EXTENSION_SECTOR_COUNT out of range"
+#endif
 
 #define MAX_BOOT_FAILURES 3
 #define DEVINFO_BLOCK_SIZE 512
+#define EXTENSION_SIZE (EXTENSION_SECTOR_COUNT*512)
 
 struct device_info {
 	unsigned char magic[DEVICE_MAGIC_SIZE];
@@ -63,7 +90,8 @@ struct device_info {
 	uint8_t  failed_boots;
 	uint32_t crcsum;
 	uint8_t  sernum;
-	uint8_t  unused__[3];
+	uint8_t  unused__;
+	uint16_t ext_sectors;
 } __attribute__((packed));
 #define FLAG_BOOT_IN_PROGRESS	(1<<0)
 #define DEVINFO_HDR_SIZE sizeof(struct device_info)
@@ -82,23 +110,56 @@ struct devinfo_context {
 	struct device_info curinfo;
 	struct info_var *vars;
 	size_t varsize;
-	uint8_t infobuf[2][DEVINFO_BLOCK_SIZE];
+	uint8_t infobuf[2][DEVINFO_BLOCK_SIZE+(MAX_EXTENSION_SECTORS*512)];
 	/* storage for setting variables */
 	char namebuf[DEVINFO_BLOCK_SIZE];
-	char valuebuf[DEVINFO_BLOCK_SIZE];
+	char valuebuf[DEVINFO_BLOCK_SIZE+EXTENSION_SIZE-sizeof(uint32_t)];
 };
 
 /*
  * We stash the info at the end of mmcblk0boot1, just
  * in front of the pseudo-GPT that NVIDIA puts at the
- * very end. Two copies, 512 bytes each.
+ * very end. Two copies, one 512 byte sector each for
+ * the base, plus extended storage for variables of
+ * one or more sectors, configurable at build time.
  *
  * We look for these using SEEK_END, so the offsets
- * must be negative.
+ * must be negative. The pseudo-GPT occupies the
+ * last 34 sectors of the partition, we leave two
+ * additional sectors as buffer.
+ *
+ * Note that 4 bytes are reserved at the end of
+ * each of the extended storage blocks for a CRC
+ * checksum for the block, which is maintained
+ * separately from the CRC checksum for the base
+ * block for compatibility with older versions of
+ * this tool that did not support the extensions.
+ *
+ * Example layout with 256KiB (1 base sector plus 511
+ * extension sectors) per storage copy:
+ *
+ *  sector                                          offset (hex)
+ *  7132         +---------------------------------+  37B800
+ *               |       extended var store B      |
+ *               +---------------------------------+
+ *  7643         +---------------------------------+  3BB600
+ *               |       extended var store A      |
+ *               +---------------------------------+
+ *  8154         =       base devinfo copy B       =  3FB400
+ *  8155         =       base devinfo copy A       =  3FB600
+ *               ~---------- buffer ---------------~  3FB800
+ *  8159         +---------------------------------+
+ *               |           pseudo-GPT            |
+ *  8192         +---------------------------------+
  */
 static const off_t devinfo_offset[2] = {
 	[0] = -((36 + 1) * 512),
 	[1] = -((36 + 2) * 512),
+};
+
+static const off_t extension_offset[2] = {
+	[0] = -((EXTENSION_SECTOR_COUNT + 36 + 2) * 512),
+	[1] = -((EXTENSION_SECTOR_COUNT * 2 + 36 + 2) * 512),
 };
 
 static const char devinfo_dev[] = "/dev/mmcblk0boot1";
@@ -195,7 +256,7 @@ parse_vars (struct devinfo_context *ctx)
 		return -1;
 	}
 	for (cp = (char *)(ctx->infobuf[ctx->current] + DEVINFO_HDR_SIZE),
-		     remain = DEVINFO_BLOCK_SIZE - DEVINFO_HDR_SIZE,
+		     remain = (DEVINFO_BLOCK_SIZE+EXTENSION_SIZE-sizeof(uint32_t)) - DEVINFO_HDR_SIZE,
 		     ctx->varsize = 0,
 		     last = NULL;
 	     remain > 0 && *cp != '\0';
@@ -247,7 +308,7 @@ pack_vars (struct devinfo_context *ctx, int idx)
 	if (ctx->vars == NULL)
 		return 0;
 	for (var = ctx->vars, cp = (char *)(ctx->infobuf[idx] + DEVINFO_HDR_SIZE),
-		     remain = DEVINFO_BLOCK_SIZE - DEVINFO_HDR_SIZE;
+		     remain = (DEVINFO_BLOCK_SIZE+EXTENSION_SIZE-sizeof(uint32_t)) - DEVINFO_HDR_SIZE;
 	     var != NULL && remain > 0;
 	     var = var->next) {
 		nlen = strlen(var->name) + 1;
@@ -327,6 +388,9 @@ find_bootinfo (int readonly, struct devinfo_context **ctxp)
 		return -1;
 	}
 	for (i = 0; i < sizeof(devinfo_offset)/sizeof(devinfo_offset[0]); i++) {
+		/*
+		 * Read base block
+		 */
 		if (lseek(ctx->fd, devinfo_offset[i], SEEK_END) < 0)
 			continue;
 		for (n = 0; n < DEVINFO_BLOCK_SIZE; n += cnt) {
@@ -336,22 +400,57 @@ find_bootinfo (int readonly, struct devinfo_context **ctxp)
 		}
 		if (n < DEVINFO_BLOCK_SIZE)
 			continue;
+
 		dp = (struct device_info *)(ctx->infobuf[i]);
 
 		if (memcmp(dp->magic, DEVICE_MAGIC, DEVICE_MAGIC_SIZE) != 0)
 			continue;
-		if (dp->devinfo_version == DEVINFO_VERSION_OLD) {
+		/*
+		 * Automatically convert older layouts to current:
+		 *
+		 * V1 was one sector with different structure and no variable space
+		 * V2 was one sector with variables but no extension space
+		 */
+		if (dp->devinfo_version == DEVINFO_VERSION_OLDER) {
 			uint8_t inprogress = dp->flags;
 			dp->flags = (inprogress != 0 ? FLAG_BOOT_IN_PROGRESS : 0);
 			ctx->valid[i] = 1;
-			memset(ctx->infobuf[i] + sizeof(struct device_info), 0, DEVINFO_BLOCK_SIZE-sizeof(struct device_info));
+			memset(ctx->infobuf[i] + sizeof(struct device_info), 0, DEVINFO_BLOCK_SIZE+EXTENSION_SIZE-sizeof(struct device_info));
+			dp->ext_sectors = EXTENSION_SECTOR_COUNT;
+			dp->devinfo_version = DEVINFO_VERSION_CURRENT;
+			continue;
+		}
+		if (dp->devinfo_version == DEVINFO_VERSION_OLD) {
+			uint32_t crcsum = dp->crcsum;
+			dp->crcsum = 0;
+			if (crc32(0, ctx->infobuf[i], DEVINFO_BLOCK_SIZE) != crcsum)
+				continue;
+			ctx->valid[i] = 1;
+			memset(ctx->infobuf[i] + DEVINFO_BLOCK_SIZE, 0, EXTENSION_SIZE);
+			dp->ext_sectors = EXTENSION_SECTOR_COUNT;
 			dp->devinfo_version = DEVINFO_VERSION_CURRENT;
 			continue;
 		}
 		if (dp->devinfo_version >= DEVINFO_VERSION_CURRENT) {
-			uint32_t crcsum = dp->crcsum;
-			dp->crcsum = 0;
-			if (crc32(0, ctx->infobuf[i], DEVINFO_BLOCK_SIZE) != crcsum)
+			uint32_t crcsum;
+		        if (dp->ext_sectors != EXTENSION_SECTOR_COUNT) {
+				fprintf(stderr, "warning: extension size mismatch\n");
+				continue;
+			}
+			/*
+			 * Read extension block
+			 */
+			if (lseek(ctx->fd, extension_offset[i], SEEK_END) < 0)
+				continue;
+			for (n = 0; n < EXTENSION_SIZE; n += cnt) {
+				cnt = read(ctx->fd, &ctx->infobuf[i][DEVINFO_BLOCK_SIZE+n], EXTENSION_SIZE-n);
+				if (cnt < 0)
+					break;
+			}
+			if (n < EXTENSION_SIZE)
+				continue;
+			crcsum = *(uint32_t *)(&ctx->infobuf[i][DEVINFO_BLOCK_SIZE+EXTENSION_SIZE-sizeof(uint32_t)]);
+			if (crc32(0, &ctx->infobuf[i][DEVINFO_BLOCK_SIZE], EXTENSION_SIZE-sizeof(uint32_t)) != crcsum)
 				continue;
 		} else
 			continue; /* unrecognized version */
@@ -396,6 +495,7 @@ find_bootinfo (int readonly, struct devinfo_context **ctxp)
 static int
 update_bootinfo (struct devinfo_context *ctx)
 {
+	uint32_t *crcptr;
 	struct device_info *info;
 	ssize_t n, cnt;
 	int idx;
@@ -417,14 +517,18 @@ update_bootinfo (struct devinfo_context *ctx)
 		idx = 1 - ctx->current;
 
 	info = (struct device_info *) ctx->infobuf[idx];
+	crcptr = (uint32_t *) &ctx->infobuf[idx][DEVINFO_BLOCK_SIZE + EXTENSION_SIZE - sizeof(uint32_t)];
 	memset(info, 0, DEVINFO_BLOCK_SIZE);
 	memcpy(info->magic, DEVICE_MAGIC, sizeof(info->magic));
 	info->devinfo_version = DEVINFO_VERSION_CURRENT;
 	info->flags = ctx->curinfo.flags;
 	info->failed_boots = ctx->curinfo.failed_boots;
 	info->sernum = ctx->curinfo.sernum + 1;
-	pack_vars(ctx, idx);
+	info->ext_sectors = EXTENSION_SECTOR_COUNT;
+	if (pack_vars(ctx, idx) < 0)
+		return -1;
 	info->crcsum = crc32(0, ctx->infobuf[idx], DEVINFO_BLOCK_SIZE);
+	*crcptr = crc32(0, &ctx->infobuf[idx][DEVINFO_BLOCK_SIZE], EXTENSION_SIZE-sizeof(uint32_t));
 
 	if (lseek(ctx->fd, devinfo_offset[idx], SEEK_END) < 0) {
 		perror(devinfo_dev);
@@ -433,6 +537,19 @@ update_bootinfo (struct devinfo_context *ctx)
 	}
 	for (n = 0; n < DEVINFO_BLOCK_SIZE; n += cnt) {
 		cnt = write(ctx->fd, ctx->infobuf[idx] + n, DEVINFO_BLOCK_SIZE-n);
+		if (cnt < 0) {
+			perror(devinfo_dev);
+			set_bootdev_writeable_status(0);
+			return -1;
+		}
+	}
+	if (lseek(ctx->fd, extension_offset[idx], SEEK_END) < 0) {
+		perror(devinfo_dev);
+		set_bootdev_writeable_status(0);
+		return -1;
+	}
+	for (n = 0; n < EXTENSION_SIZE; n += cnt) {
+		cnt = write(ctx->fd, ctx->infobuf[idx] + DEVINFO_BLOCK_SIZE + n, EXTENSION_SIZE-n);
 		if (cnt < 0) {
 			perror(devinfo_dev);
 			set_bootdev_writeable_status(0);
@@ -612,10 +729,12 @@ show_bootinfo(void) {
 	}
 	printf("devinfo version:        %u\n"
 	       "Boot in progress:       %s\n"
-	       "Failed boots:           %d\n",
+	       "Failed boots:           %d\n"
+	       "Extension space:        %d sectors\n",
 	       ctx->curinfo.devinfo_version,
 	       (ctx->curinfo.flags & FLAG_BOOT_IN_PROGRESS) ? "YES" : "NO",
-	       ctx->curinfo.failed_boots);
+	       ctx->curinfo.failed_boots,
+	       ctx->curinfo.ext_sectors);
 	close_bootinfo(ctx);
 	return 0;
 
@@ -691,7 +810,7 @@ set_bootvar (const char *name, const char *value)
 		fprintf(stderr, "invalid variable name\n");
 		return 1;
 	} else {
-		char *cp;
+		const char *cp;
 		for (cp = name + 1; *cp != '\0'; cp++) {
 			if (!(*cp == '_' || isalnum(*cp))) {
 				fprintf(stderr, "invalid variable name\n");
@@ -703,7 +822,7 @@ set_bootvar (const char *name, const char *value)
 	 * Values may only contain printable characters
 	 */
 	if (value != NULL) {
-		char *cp;
+		const char *cp;
 		for (cp = value; *cp != '\0'; cp++) {
 			if (!isprint(*cp)) {
 				fprintf(stderr, "invalid value for variable\n");
@@ -718,7 +837,7 @@ set_bootvar (const char *name, const char *value)
 		return -2;
 	}
 
-	if (strlen(name) > DEVINFO_BLOCK_SIZE-DEVINFO_HDR_SIZE) {
+	if (strlen(name) >= sizeof(ctx->namebuf)) {
 		fprintf(stderr, "error: variable name too long\n");
 		close_bootinfo(ctx);
 		set_bootdev_writeable_status(0);
@@ -727,8 +846,10 @@ set_bootvar (const char *name, const char *value)
 
 	strcpy(ctx->namebuf, name);
 	if (value != NULL) {
-		size_t s = strlen(name) + strlen(value) + 2;
-		if (ctx->varsize + s > DEVINFO_BLOCK_SIZE-DEVINFO_HDR_SIZE) {
+		size_t vallen = strlen(value);
+		size_t s = strlen(name) + vallen + 2;
+		if (vallen >= sizeof(ctx->valuebuf) ||
+		    ctx->varsize + s > DEVINFO_BLOCK_SIZE+EXTENSION_SIZE-DEVINFO_HDR_SIZE-sizeof(uint32_t)) {
 			fprintf(stderr, "error: insufficient space for variable storage\n");
 			close_bootinfo(ctx);
 			set_bootdev_writeable_status(0);

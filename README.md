@@ -27,6 +27,10 @@ rootfs have occurred.  The script can then take action based on that
 indication - for example, switching to the other boot slot, or booting
 from a recovery partition.
 
+The tool also supports storage and retrieval of named strings, similar
+to U-Boot environment variables. The number of flash sectors allocated
+for variable storage is configurable at build time.
+
 ## tegra-bootloader-update
 This tool can be used to parse a bootloader update (BUP) payload generated
 by the Tegra flashing tools, as well as program the appropriate contents

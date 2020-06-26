@@ -204,6 +204,8 @@ main (int argc, char * const argv[])
 	int initialize = 0;
 	int dryrun = 0;
 	int ret = 0;
+	int missing_count;
+	const char *missing[32];
 	unsigned int i;
 
 	while ((c = getopt_long_only(argc, argv, shortopts, options, &which)) != -1) {
@@ -261,6 +263,23 @@ main (int argc, char * const argv[])
 		perror(argv[optind]);
 		return 1;
 	}
+
+	missing_count = bup_find_missing_entries(bupctx, missing, sizeof(missing)/sizeof(missing[0]));
+	if (missing_count < 0) {
+		fprintf(stderr, "Error checking BUP payload for missing entries\n");
+		bup_finish(bupctx);
+		return 1;
+	} else if (missing_count > 0) {
+		int i;
+		fprintf(stderr, "Error: missing entries for partition%s: %s",
+			(missing_count == 1 ? "" : "s"), missing[0]);
+		for (i = 1; i < missing_count; i++)
+			fprintf(stderr, ", %s", missing[i]);
+		fprintf(stderr, "\n       for TNSPEC %s\n", bup_tnspec(bupctx));
+		bup_finish(bupctx);
+		return 1;
+	}
+		
 	gptctx = gpt_init(bup_gpt_device(bupctx), 512);
 	if (gptctx == NULL) {
 		perror("boot sector GPT");

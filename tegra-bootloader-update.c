@@ -52,12 +52,14 @@ struct update_entry_s {
 	size_t length;
 };
 
-static struct update_entry_s redundant_entries[64];
-static struct update_entry_s nonredundant_entries[64];
+#define MAX_ENTRIES 64
+static struct update_entry_s redundant_entries[MAX_ENTRIES];
+static struct update_entry_s nonredundant_entries[MAX_ENTRIES];
 static unsigned int redundant_entry_count;
 static unsigned int nonredundant_entry_count;
 static size_t contentbuf_size;
 static uint8_t *contentbuf;
+static int bct_updated;
 
 static void
 print_usage (void)
@@ -118,6 +120,86 @@ set_bootdev_writeable_status (const char *bootdev, int make_writeable)
 } /* set_bootdev_writeable_status */
 
 /*
+ * update_bct
+ *
+ * Special handling for writing the BCT. Content to be
+ * written expected to be present in contentbuf.
+ *
+ * A BCT slot is 0xE00 = 3584 bytes.
+ * A block is 16KiB and holds multiple slots.
+ * The Tegra bootrom can handle up to 63 blocks, but
+ * in practice, only block 0 slots 0 & 1, and block 1 slot 0
+ * are used.
+ *
+ */
+static int
+update_bct (int bootfd, struct update_entry_s *ent)
+{
+	static uint8_t slotbuf[4096];
+	ssize_t n, total, remain;
+	int i;
+
+	if (ent->length > sizeof(slotbuf)) {
+		printf("[FAIL]\n");
+		fprintf(stderr, "BCT too large for buffer\n");
+		return -1;
+	}
+
+	if (lseek(bootfd, ent->part->first_lba * 512, SEEK_SET) == (off_t) -1) {
+		printf("[FAIL]\n");
+		perror("BCT");
+		return -1;
+	}
+	for (remain = sizeof(slotbuf), total = 0; remain > 0; total += n, remain -= n) {
+		n = read(bootfd, slotbuf + total, remain);
+		if (n <= 0) {
+			printf("[FAIL]\n");
+			perror("reading BCT");
+			return -1;
+		}
+	}
+	if (memcmp(contentbuf, slotbuf, ent->length) == 0) {
+		printf("[no update needed]\n");
+		return 0;
+	}
+	
+	for (i = 0; i < 3; i++) {
+		off_t offset;
+		switch (i) {
+			case 0:
+				offset = 512 * ((ent->length + 511) / 512);
+				break;
+			case 1:
+				offset = 0;
+				break;
+			case 2:
+				offset = 16384;
+				break;
+		}
+		printf("[offset=%lu]...", (unsigned long) offset);
+		if (lseek(bootfd, ent->part->first_lba * 512 + offset, SEEK_SET) == (off_t) -1) {
+			printf("[FAIL]\n");
+			perror("BCT");
+			return -1;
+		}
+
+		for (remain = ent->length, total = 0; remain > 0; total += n, remain -= n) {
+			n = write(bootfd, contentbuf + total, remain);
+			if (n <= 0) {
+				printf("[FAIL]\n");
+				perror("writing BCT");
+				return -1;
+			}
+		}
+	}
+
+	bct_updated = 1;
+	printf("[OK]\n");
+	return 0;
+
+} /* update_bct */
+
+/*
  * process_entry
  */
 static int
@@ -152,12 +234,13 @@ process_entry (bup_context_t *bupctx, int bootfd, struct update_entry_s *ent, in
 			perror(ent->devname);
 			return -1;
 		}
+	} else if (strcmp(ent->partname, "BCT") == 0) {
+		return update_bct(bootfd, ent);
 	} else {
 		fd = bootfd;
 		if (lseek(fd, ent->part->first_lba * 512, SEEK_SET) == (off_t) -1) {
 			printf("[FAIL]\n");
 			fprintf(stderr, "could not seek to start of %s in boot partition\n", ent->partname);
-			close(fd);
 			return -1;
 		}
 	}
@@ -166,7 +249,8 @@ process_entry (bup_context_t *bupctx, int bootfd, struct update_entry_s *ent, in
 		if (n <= 0) {
 			printf("[FAIL]\n");
 			perror(ent->partname);
-			close(fd);
+			if (fd != bootfd)
+				close(fd);
 			return -1;
 		}
 	}
@@ -180,6 +264,50 @@ process_entry (bup_context_t *bupctx, int bootfd, struct update_entry_s *ent, in
 	return 0;
 
 } /* process_entry */
+
+/*
+ * order_entries
+ *
+ * Sort an entries list to ensure that we process
+ * mb2/mb2_b before BCT before mb1/mb1_b.
+ */
+static void
+order_entries (struct update_entry_s *orig, struct update_entry_s **ordered, int count)	       
+{
+	int i, j, mb1, mb1_b, bct, mb2, mb2_b;
+
+	mb1 = mb1_b = bct = mb2 = mb2_b = -1;
+	j = 0;
+	for (i = 0; i < count; i++) {
+		if (strcmp(orig[i].partname, "mb1") == 0)
+			mb1 = i;
+		else if (strcmp(orig[i].partname, "mb1_b") == 0)
+			mb1_b = i;
+		else if (strcmp(orig[i].partname, "mb2") == 0)
+			mb2 = i;
+		else if (strcmp(orig[i].partname, "mb2_b") == 0)
+			mb2_b = i;
+		else if (strcmp(orig[i].partname, "BCT") == 0)
+			bct = i;
+		else
+			ordered[j++] = &orig[i];
+	}
+
+	if (mb2 >= 0)
+		ordered[j++] = &orig[mb2];
+	if (mb2_b >= 0)
+		ordered[j++] = &orig[mb2_b];
+	if (bct >= 0)
+		ordered[j++] = &orig[bct];
+	if (mb1 >= 0)
+		ordered[j++] = &orig[mb1];
+	if (mb1_b >= 0)
+		ordered[j++] = &orig[mb1_b];
+
+	if (j != count)
+		fprintf(stderr, "Warning: ordered entry list mismatch\n");
+
+} /* order_entries */
 
 /*
  * main program
@@ -206,6 +334,7 @@ main (int argc, char * const argv[])
 	int ret = 0;
 	int missing_count;
 	const char *missing[32];
+	struct update_entry_s *ordered_entries[MAX_ENTRIES], mb1_other;
 	unsigned int i;
 
 	while ((c = getopt_long_only(argc, argv, shortopts, options, &which)) != -1) {
@@ -298,12 +427,16 @@ main (int argc, char * const argv[])
 	 * and at the same time build the set of update tasks.
 	 *
 	 * For initialization, we separate the redundant entries from the non-redundant
-	 * ones and write the non-redundant entries last (there's probably only one, the BCT).
+	 * ones and write the non-redundant entries last. While the BCT appears to
+	 * be non-redundant (only one BCT partition), it is internally redundant and
+	 * requires special handling.
+	 *
 	 * For updates, we never write the non-redundant entries.
 	 */
 	bupiter = 0;
 	redundant_entry_count = nonredundant_entry_count = 0;
 	largest_length = 0;
+	memset(&mb1_other, 0, sizeof(mb1_other));
 	while (bup_enumerate_entries(bupctx, &bupiter, &partname, &offset, &length, &version)) {
 		gpt_entry_t *part, *part_b;
 		char partname_b[64], pathname_b[PATH_MAX];
@@ -320,7 +453,7 @@ main (int argc, char * const argv[])
 		if (part != NULL) {
 			part_b = gpt_find_by_name(gptctx, partname_b);
 			if (initialize) {
-				if (part_b != NULL) {
+				if (part_b != NULL || strcmp(partname, "BCT") == 0) {
 					if (redundant_entry_count >= sizeof(redundant_entries)/sizeof(redundant_entries[0])) {
 						fprintf(stderr, "too many partitions to initialize\n");
 						ret = 1;
@@ -329,10 +462,12 @@ main (int argc, char * const argv[])
 					redundant_entries[redundant_entry_count] = updent;
 					redundant_entries[redundant_entry_count].part = part;
 					redundant_entry_count += 1;
-					redundant_entries[redundant_entry_count] = updent;
-					strcpy(redundant_entries[redundant_entry_count].partname, partname_b);
-					redundant_entries[redundant_entry_count].part = part_b;
-					redundant_entry_count += 1;
+					if (part_b != NULL) {
+						redundant_entries[redundant_entry_count] = updent;
+						strcpy(redundant_entries[redundant_entry_count].partname, partname_b);
+						redundant_entries[redundant_entry_count].part = part_b;
+						redundant_entry_count += 1;
+					}
 				} else {
 					if (nonredundant_entry_count >= sizeof(nonredundant_entries)/sizeof(nonredundant_entries[0])) {
 						fprintf(stderr, "too many (non-redundant) partitions to initialize\n");
@@ -343,15 +478,25 @@ main (int argc, char * const argv[])
 					nonredundant_entries[nonredundant_entry_count].part = part;
 					nonredundant_entry_count += 1;
 				}
-			} else if (part_b != NULL) {
+			} else if (part_b != NULL || strcmp(partname, "BCT") == 0) {
 				if (redundant_entry_count >= sizeof(redundant_entries)/sizeof(redundant_entries[0])) {
 					fprintf(stderr, "too many partitions to update\n");
 					ret = 1;
 					goto depart;
 				}
 				redundant_entries[redundant_entry_count] = updent;
-				strcpy(redundant_entries[redundant_entry_count].partname, (*suffix == '\0' ? partname : partname_b));
-				redundant_entries[redundant_entry_count].part = (*suffix == '\0' ? part : part_b);
+				strcpy(redundant_entries[redundant_entry_count].partname,
+				       (part_b == NULL || *suffix == '\0' ? partname : partname_b));
+				redundant_entries[redundant_entry_count].part = (part_b == NULL || *suffix == '\0' ? part : part_b);
+				/*
+				 * Save the info for the other mb1 entry, in case the BCT
+				 * was updated and we need to update both mb1's
+				 */
+				if (strcmp(partname, "mb1") == 0) {
+					mb1_other = updent;
+					strcpy(mb1_other.partname, (*suffix == '\0' ? partname_b : partname));
+					mb1_other.part = (*suffix == '\0' ? part_b : part);
+				}
 				redundant_entry_count += 1;
 			}
 		} else {
@@ -406,14 +551,26 @@ main (int argc, char * const argv[])
 		}
 	}
 
+	order_entries(redundant_entries, ordered_entries, redundant_entry_count);
+
 	for (i = 0; i < redundant_entry_count; i++)
-		if (process_entry(bupctx, fd, &redundant_entries[i], dryrun) != 0)
+		if (process_entry(bupctx, fd, ordered_entries[i], dryrun) != 0)
 			goto reset_and_depart;
 
 	if (initialize) {
 		for (i = 0; i < nonredundant_entry_count; i++)
 			if (process_entry(bupctx, fd, &nonredundant_entries[i], dryrun) != 0)
 				goto reset_and_depart;
+	} else if (bct_updated) {
+		/*
+		 * If the BCT was updated, we must update both mb1 and mb1_b
+		 */
+		if (mb1_other.partname[0] == '\0') {
+			fprintf(stderr, "Error: could not update alternate mb1 partition\n");
+			goto reset_and_depart;
+		}
+		if (process_entry(bupctx, fd, &mb1_other, dryrun) != 0)
+			goto reset_and_depart;
 	}
 
   reset_and_depart:

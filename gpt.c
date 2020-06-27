@@ -58,8 +58,6 @@ struct gpt_context_s {
 	struct gpt_entry_s *entries;
 };
 
-static const uint8_t null_type[16] = { 0 };
-
 gpt_context_t *
 gpt_init (const char *devname, unsigned int blocksize)
 {
@@ -147,7 +145,7 @@ gpt_load (gpt_context_t *ctx, unsigned int flags)
 {
 	off_t startpos;
 	ssize_t n;
-	unsigned int entry_count, entries_max, i;
+	unsigned int i;
 	int fd = ctx->fd;
 	struct gpt_header_s *hdr;
 	struct gpt_entry_ondisk_s *ent;

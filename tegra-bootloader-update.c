@@ -19,21 +19,24 @@
 #include <fcntl.h>
 #include "bup.h"
 #include "gpt.h"
-
+#include "soctype.h"
+#include "bct.h"
 
 static struct option options[] = {
 	{ "initialize",		no_argument,		0, 'i' },
 	{ "slot-suffix",	required_argument,	0, 's' },
 	{ "dry-run",		no_argument,		0, 'n' },
+	{ "chipid",		required_argument,	0, 'c' },
 	{ "help",		no_argument,		0, 'h' },
 	{ 0,			0,			0, 0   }
 };
-static const char *shortopts = ":ins:h";
+static const char *shortopts = ":ins:c:h";
 
 static char *optarghelp[] = {
 	"--initialize         ",
 	"--slot-suffix        ",
 	"--dry-run            ",
+	"--chipid             ",
 	"--help               ",
 };
 
@@ -41,6 +44,7 @@ static char *opthelp[] = {
 	"initialize the entire set of boot partitions",
 	"update only the redundant boot partitions with the specified suffix",
 	"do not perform any writes, just show what would be written",
+	"specify Tegra chip ID (used only for testing)",
 	"display this help text"
 };
 
@@ -60,6 +64,7 @@ static unsigned int nonredundant_entry_count;
 static size_t contentbuf_size;
 static uint8_t *contentbuf;
 static int bct_updated;
+static tegra_soctype_t soctype = TEGRA_SOCTYPE_INVALID;
 
 static void
 print_usage (void)
@@ -104,12 +109,13 @@ set_bootdev_writeable_status (const char *bootdev, int make_writeable)
 	}
 	make_writeable = !!make_writeable;
 	is_writeable = buf[0] == '0';
-	if (make_writeable && !is_writeable)
+	if (make_writeable && !is_writeable) {
 		if (write(fd, "0", 1) != 1)
 			rc = 1;
-	else if (!make_writeable && is_writeable)
+	} else if (!make_writeable && is_writeable) {
 		if (write(fd, "1", 1) != 1)
 			rc = 1;
+	}
 	close(fd);
 
 	if (rc)
@@ -131,12 +137,17 @@ set_bootdev_writeable_status (const char *bootdev, int make_writeable)
  * in practice, only block 0 slots 0 & 1, and block 1 slot 0
  * are used.
  *
+ * Write sequence is block 0/slot 1, then block 1/slot 0,
+ * then block 0/slot 0.
+ *
  */
 static int
 update_bct (int bootfd, struct update_entry_s *ent)
 {
 	static uint8_t slotbuf[4096];
 	ssize_t n, total, remain;
+	unsigned int block_size = 16384;
+	unsigned int page_size = 512;
 	int i;
 
 	if (ent->length > sizeof(slotbuf)) {
@@ -162,18 +173,24 @@ update_bct (int bootfd, struct update_entry_s *ent)
 		printf("[no update needed]\n");
 		return 0;
 	}
-	
+
+	if ((soctype == TEGRA_SOCTYPE_186 && !bct_update_valid_t18x(slotbuf, contentbuf, &block_size, &page_size)) ||
+	    (soctype == TEGRA_SOCTYPE_194 && !bct_update_valid_t19x(slotbuf, contentbuf, &block_size, &page_size))) {
+		printf("[FAIL]\n");
+		return -1;
+	}
+
 	for (i = 0; i < 3; i++) {
 		off_t offset;
 		switch (i) {
 			case 0:
-				offset = 512 * ((ent->length + 511) / 512);
+				offset = page_size * ((ent->length + (page_size-1)) / page_size);
 				break;
 			case 1:
-				offset = 0;
+				offset = block_size;
 				break;
 			case 2:
-				offset = 16384;
+				offset = 0;
 				break;
 		}
 		printf("[offset=%lu]...", (unsigned long) offset);
@@ -319,7 +336,6 @@ main (int argc, char * const argv[])
 	int reset_bootdev;
 	gpt_context_t *gptctx;
 	bup_context_t *bupctx;
-	gpt_entry_t *part;
 	struct update_entry_s updent;
 	void *bupiter;
 	const char *partname;
@@ -366,6 +382,14 @@ main (int argc, char * const argv[])
 					return 1;
 				}
 				break;
+			case 'c':
+				soctype = soctype_from_chipid(strtoul(optarg, NULL, 0));
+				if (soctype == TEGRA_SOCTYPE_INVALID) {
+					fprintf(stderr, "Error: invalid SoC type: %s\n", optarg);
+					print_usage();
+					return 1;
+				}
+				break;
 			case 'n':
 				dryrun = 1;
 				break;
@@ -384,6 +408,20 @@ main (int argc, char * const argv[])
 	if (!initialize && suffix == NULL) {
 		fprintf(stderr, "Error: must either specify --initialize or --slot-suffix\n");
 		print_usage();
+		return 1;
+	}
+
+	if (soctype == TEGRA_SOCTYPE_INVALID) {
+		soctype = soctype_get();
+		if (soctype == TEGRA_SOCTYPE_INVALID) {
+			fprintf(stderr, "Error: could not determine SoC type\n");
+			return 1;
+		}
+	}
+
+	if (soctype != TEGRA_SOCTYPE_186 &&
+	    soctype != TEGRA_SOCTYPE_194) {
+		fprintf(stderr, "Error: unsupported SoC type: %s\n", soctype_name(soctype));
 		return 1;
 	}
 

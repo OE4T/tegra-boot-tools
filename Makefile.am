@@ -17,8 +17,8 @@ systemdsystemunitdir = @systemdsystemunitdir@
 EXTRA_DIST = units/finished-booting.target units/update_bootinfo_service.in
 
 bin_PROGRAMS = tegra-bootloader-update
-tegra_bootloader_update_SOURCES = tegra-bootloader-update.c gpt.c bup.c
-tegra_bootloader_update_CFLAGS = $(ZLIB_CFLAGS)
+tegra_bootloader_update_SOURCES = tegra-bootloader-update.c gpt.c bup.c soctype.c bct_t18x.c bct_t19x.c
+tegra_bootloader_update_CFLAGS = $(ZLIB_CFLAGS) -I$(srcdir)/nvidia
 tegra_bootloader_update_LDADD = $(ZLIB_LIBS)
 tegra_bootloader_update_LDFLAGS = $(ZLIB_LDFLAGS)
 

@@ -48,3 +48,7 @@ files needed to configure and build.
 
 # License
 Distributed under license. See the [LICENSE](LICENSE) file for details.
+
+Header files under the [nvidia/t18x](nvidia/t18x) and [nvidia/t19x](nvidia/t19x)
+directories are from NVIDIA, with a BSD 3-clause license.  See the individual
+header files for details.

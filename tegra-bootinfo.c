@@ -234,12 +234,13 @@ set_bootdev_writeable_status (int make_writeable)
 	}
 	make_writeable = !!make_writeable;
 	is_writeable = buf[0] == '0';
-	if (make_writeable && !is_writeable)
+	if (make_writeable && !is_writeable) {
 		if (write(fd, "0", 1) != 1)
 			fprintf(stderr, "error updating force_ro for %s\n", devinfo_dev);
-	else if (!make_writeable && is_writeable)
+	} else if (!make_writeable && is_writeable) {
 		if (write(fd, "1", 1) != 1)
 			fprintf(stderr, "error updating force_ro for %s\n", devinfo_dev);
+	}
 	close(fd);
 
 	return make_writeable != is_writeable;
@@ -574,6 +575,8 @@ update_bootinfo (struct devinfo_context *ctx)
 		}
 	}
 
+	return 0;
+
 } /* update_bootinfo */
 
 /*
@@ -833,7 +836,6 @@ set_bootvar (const char *name, const char *value, char *inputfile)
 
 	if (inputfile != NULL) {
 		FILE *fp;
-		struct stat st;
 		ssize_t n, cnt;
 
 		if ((value != NULL) || strchr(name, '=') != NULL) {

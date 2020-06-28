@@ -182,6 +182,7 @@ static struct option options[] = {
 	{ "get-variable",	no_argument,		0, 'v' },
 	{ "set-variable",	no_argument,		0, 'V' },
 	{ "help",		no_argument,		0, 'h' },
+	{ "version",		no_argument,		0, 0   },
 	{ 0,			0,			0, 0   }
 };
 static const char *shortopts = ":bcIsnf:FvVh";
@@ -197,6 +198,7 @@ static char *optarghelp[] = {
 	"--get-variable       ",
 	"--set-variable       ",
 	"--help               ",
+	"--version            ",
 };
 
 static char *opthelp[] = {
@@ -209,7 +211,8 @@ static char *opthelp[] = {
 	"force initialization even if bootinfo already initialized (for use with --initialize)",
 	"get the value of a stored variable by name, list all if no name specified",
 	"set the value of a stored variable (delete if no value)",
-	"display this help text"
+	"display this help text",
+	"display version information"
 };
 
 /*
@@ -606,7 +609,7 @@ print_usage (void)
 	int i;
 	printf("\nUsage:\n");
 	printf("\ttegra-bootinfo\n");
-	printf("Options (use only one per invocation):\n");
+	printf("Options:\n");
 	for (i = 0; i < sizeof(options)/sizeof(options[0]) && options[i].name != 0; i++) {
 		printf(" %s\t%c%c\t%s\n",
 		       optarghelp[i],
@@ -1060,6 +1063,12 @@ main (int argc, char * const argv[])
 			}
 			cmd = (c == 'v' ? showvar : setvar);
 			break;
+		case 0:
+			if (strcmp(options[which].name, "version") == 0) {
+				printf("%s\n", VERSION);
+				return 0;
+			}
+			/* fallthrough */
 		default:
 			fprintf(stderr, "Error: unrecognized option\n");
 			print_usage();

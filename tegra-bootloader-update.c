@@ -21,6 +21,7 @@
 #include "gpt.h"
 #include "soctype.h"
 #include "bct.h"
+#include "config.h"
 
 static struct option options[] = {
 	{ "initialize",		no_argument,		0, 'i' },
@@ -28,6 +29,7 @@ static struct option options[] = {
 	{ "dry-run",		no_argument,		0, 'n' },
 	{ "chipid",		required_argument,	0, 'c' },
 	{ "help",		no_argument,		0, 'h' },
+	{ "version",		no_argument,		0, 0   },
 	{ 0,			0,			0, 0   }
 };
 static const char *shortopts = ":ins:c:h";
@@ -38,6 +40,7 @@ static char *optarghelp[] = {
 	"--dry-run            ",
 	"--chipid             ",
 	"--help               ",
+	"--version            ",
 };
 
 static char *opthelp[] = {
@@ -45,7 +48,8 @@ static char *opthelp[] = {
 	"update only the redundant boot partitions with the specified suffix",
 	"do not perform any writes, just show what would be written",
 	"specify Tegra chip ID (used only for testing)",
-	"display this help text"
+	"display this help text",
+	"display version information"
 };
 
 struct update_entry_s {
@@ -393,6 +397,12 @@ main (int argc, char * const argv[])
 			case 'n':
 				dryrun = 1;
 				break;
+			case 0:
+				if (strcmp(options[which].name, "version") == 0) {
+					printf("%s\n", VERSION);
+					return 0;
+				}
+				/* fallthrough */
 			default:
 				fprintf(stderr, "Error: unrecognized option\n");
 				print_usage();

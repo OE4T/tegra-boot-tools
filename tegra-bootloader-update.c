@@ -190,6 +190,7 @@ update_bct (int bootfd, void *curbct, struct update_entry_s *ent)
 		}
 	}
 
+	fsync(bootfd);
 	bct_updated = 1;
 	printf("[OK]\n");
 	return 0;
@@ -250,6 +251,7 @@ maybe_update_bootpart (int bootfd, struct update_entry_s *ent, int is_bct)
 		}
 	}
 
+	fsync(bootfd);
 	printf("[OK]\n");
 	return 0;
 

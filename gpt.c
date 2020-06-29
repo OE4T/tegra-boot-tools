@@ -51,6 +51,7 @@ struct gpt_context_s {
 	unsigned int blocksize;
 	off_t devsize;
 	void *buffer;
+	int is_mmcboot1;
 	int primary_valid, backup_valid;
 	struct gpt_header_s primary_header;
 	struct gpt_header_s backup_header;
@@ -86,6 +87,7 @@ gpt_init (const char *devname, unsigned int blocksize)
 		free(ctx);
 		return NULL;
 	}
+	ctx->is_mmcboot1 = strcmp(devname, "/dev/mmcblk0boot1") == 0;
 	ctx->fd = fd;
 	ctx->blocksize = blocksize;
 	ctx->devsize = lseek(fd, 0, SEEK_END);
@@ -191,7 +193,7 @@ gpt_load (gpt_context_t *ctx, unsigned int flags)
 	 * In the NVIDIA-special pseudo-GPT in mmblk0boot1, it counts the LBAs in
 	 * both boot blocks together as if they were a single device.
 	 */
-	if (flags & GPT_NVIDIA_SPECIAL)
+	if (ctx->is_mmcboot1 && (flags & GPT_NVIDIA_SPECIAL) != 0)
 		startpos -= ctx->devsize;
 	startpos = lseek(fd, startpos, SEEK_SET);
 	if (startpos == (off_t) -1)

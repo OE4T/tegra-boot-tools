@@ -3,8 +3,8 @@ This repository contains boot-related tools for Tegra platforms.
 
 ## tegra-bootinfo
 The `tegra-bootinfo` tool provides a simple boot-count mechanism for
-Tegra platforms that do not use U-Boot as an intermediate bootloader
-Jetson TX2 and Jetson Xavier systems.
+Tegra platforms that do not use U-Boot as an intermediate bootloader,
+such as Jetson TX2 and Jetson AGX Xavier/Xavier NX systems.
 
 The native bootloaders on the TX2 and Xavier have some support for
 automatic failover in the event of a boot failure, but they give up
@@ -14,7 +14,8 @@ if the device runs unattended and is possibly subject to power outages
 that can happen at boot time.
 
 The `tega-bootinfo` tool is intended to be run from the initrd on
-these systems. It records (in a sector of the eMMC) that a boot is
+these systems. It records (in a sector of the eMMC, or in the QSPI
+boot flash on Xavier NX development kits) that a boot is
 in progress, and can be accompanied by an invocation of the `nvbootctrl`
 tool to notify the NVIDIA bootloader that the boot was successful.
 A second invocation of `tegra-bootinfo` should be used at (or close to)
@@ -30,6 +31,11 @@ from a recovery partition.
 The tool also supports storage and retrieval of named strings, similar
 to U-Boot environment variables. The number of flash sectors allocated
 for variable storage is configurable at build time.
+
+On T210 (Jetson TX1 and Nano) systems, U-Boot can be configured provide
+the boot count mechanism and appropriate failover behavior.  This tool
+will work on those systems as well, however.
+
 
 ## tegra-bootloader-update
 This tool can be used to parse a bootloader update (BUP) payload generated

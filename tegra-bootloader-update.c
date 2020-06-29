@@ -266,7 +266,8 @@ process_entry (bup_context_t *bupctx, int bootfd, struct update_entry_s *ent, in
 	ssize_t n, total, remain;
 	int fd;
 
-	printf("  Processing %s:...", ent->partname);
+	printf("  Processing %s... ", ent->partname);
+	fflush(stdout);
 	if (bup_setpos(bupctx, ent->bup_offset) == (off_t) -1) {
 		printf("[FAIL]\n");
 		fprintf(stderr, "could not set position for %s\n", ent->partname);

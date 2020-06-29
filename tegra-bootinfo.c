@@ -169,7 +169,17 @@ static const off_t extension_offset[2] = {
 	[1] = -((EXTENSION_SECTOR_COUNT * 2 + 36 + 2) * 512),
 };
 
-static const char devinfo_dev[] = "/dev/mmcblk0boot1";
+static const char *devinfo_dev;
+/*
+ * Order here is important. Some systems may have both
+ * eMMC and a SPI flash, and we prefer the eMMC.
+ *
+ * TBD: allow for customization/configuration of this list.
+ */
+static const char *devinfo_devices[] = {
+	[0] = "/dev/mmcblk0boot1",
+	[1] = "/dev/mtdblock0",
+};
 
 static struct option options[] = {
 	{ "boot-success",	no_argument,		0, 'b' },
@@ -219,6 +229,8 @@ static char *opthelp[] = {
  * set_bootdev_writeable_status
  *
  * Sets the readonly/readwrite flag for an mmc boot block.
+ * This can get called for other types of devices as well,
+ * but they typically do not have the sysfs entry to update.
  */
 static int
 set_bootdev_writeable_status (int make_writeable)
@@ -227,6 +239,10 @@ set_bootdev_writeable_status (int make_writeable)
 	char buf[1];
 	int fd, is_writeable;
 
+	if (devinfo_dev == NULL) {
+		fprintf(stderr, "%s: no devinfo device set\n", __func__);
+		return 0;
+	}
 	sprintf(pathname, "/sys/block/%s/force_ro", devinfo_dev + 5);
 	fd = open(pathname, O_RDWR);
 	if (fd < 0)
@@ -249,6 +265,31 @@ set_bootdev_writeable_status (int make_writeable)
 	return make_writeable != is_writeable;
 
 } /* set_bootdev_writeable_status */
+
+/*
+ * find_storage_dev
+ *
+ * Identifies the devinfo storage device
+ * by iterating through devinfo_devices[]. First
+ * successful access(F_OK) wins.
+ *
+ * returns 0 on success, non-0 on failure.
+ */
+static int
+find_storage_dev (void)
+{
+	unsigned int i;
+
+	for (i = 0; i < sizeof(devinfo_devices)/sizeof(devinfo_devices[0]); i++) {
+		if (access(devinfo_devices[i], F_OK) == 0) {
+			devinfo_dev = devinfo_devices[i];
+			return 0;
+		}
+	}
+	devinfo_dev = NULL;
+	return -1;
+
+} /* find_storage_dev */
 
 /*
  * parse_vars
@@ -1019,6 +1060,9 @@ main (int argc, char * const argv[])
 	char *inputfile = NULL;
 	enum {
 		nocmd,
+		success,
+		check,
+		show,
 		showvar,
 		setvar,
 		init,
@@ -1037,14 +1081,17 @@ main (int argc, char * const argv[])
 			print_usage();
 			return 0;
 		case 'b':
-			return boot_successful();
+			cmd = success;
+			break;
 		case 'c':
-			return boot_check_status();
+			cmd = check;
+			break;
 		case 'I':
 			cmd = init;
 			break;
 		case 's':
-			return show_bootinfo();
+			cmd = show;
+			break;
 		case 'n':
 			omitname = 1;
 			break;
@@ -1077,7 +1124,18 @@ main (int argc, char * const argv[])
 
 	} /* while getopt */
 
+	if (find_storage_dev() != 0) {
+		fprintf(stderr, "Error: cannot locate storage device\n");
+		return 1;
+	}
+
 	switch (cmd) {
+	case success:
+		return boot_successful();
+	case check:
+		return boot_check_status();
+	case show:
+		return show_bootinfo();
 	case init:
 		set_bootdev_writeable_status(1);
 		ret = boot_devinfo_init(force_init);

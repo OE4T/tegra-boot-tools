@@ -66,7 +66,7 @@ static struct update_entry_s nonredundant_entries[MAX_ENTRIES];
 static unsigned int redundant_entry_count;
 static unsigned int nonredundant_entry_count;
 static size_t contentbuf_size;
-static uint8_t *contentbuf;
+static uint8_t *contentbuf, *slotbuf;
 static int bct_updated;
 static tegra_soctype_t soctype = TEGRA_SOCTYPE_INVALID;
 
@@ -146,41 +146,17 @@ set_bootdev_writeable_status (const char *bootdev, int make_writeable)
  *
  */
 static int
-update_bct (int bootfd, struct update_entry_s *ent)
+update_bct (int bootfd, void *curbct, struct update_entry_s *ent)
 {
-	static uint8_t slotbuf[4096];
 	ssize_t n, total, remain;
 	unsigned int block_size = 16384;
 	unsigned int page_size = 512;
 	int i;
 
-	if (ent->length > sizeof(slotbuf)) {
+	if ((soctype == TEGRA_SOCTYPE_186 && !bct_update_valid_t18x(slotbuf, curbct, &block_size, &page_size)) ||
+	    (soctype == TEGRA_SOCTYPE_194 && !bct_update_valid_t19x(slotbuf, curbct, &block_size, &page_size))) {
 		printf("[FAIL]\n");
-		fprintf(stderr, "BCT too large for buffer\n");
-		return -1;
-	}
-
-	if (lseek(bootfd, ent->part->first_lba * 512, SEEK_SET) == (off_t) -1) {
-		printf("[FAIL]\n");
-		perror("BCT");
-		return -1;
-	}
-	for (remain = sizeof(slotbuf), total = 0; remain > 0; total += n, remain -= n) {
-		n = read(bootfd, slotbuf + total, remain);
-		if (n <= 0) {
-			printf("[FAIL]\n");
-			perror("reading BCT");
-			return -1;
-		}
-	}
-	if (memcmp(contentbuf, slotbuf, ent->length) == 0) {
-		printf("[no update needed]\n");
-		return 0;
-	}
-
-	if ((soctype == TEGRA_SOCTYPE_186 && !bct_update_valid_t18x(slotbuf, contentbuf, &block_size, &page_size)) ||
-	    (soctype == TEGRA_SOCTYPE_194 && !bct_update_valid_t19x(slotbuf, contentbuf, &block_size, &page_size))) {
-		printf("[FAIL]\n");
+		fprintf(stderr, "Error: validation check failed for BCT update\n");
 		return -1;
 	}
 
@@ -221,6 +197,65 @@ update_bct (int bootfd, struct update_entry_s *ent)
 } /* update_bct */
 
 /*
+ * maybe_update_bootpart
+ *
+ * Update a boot partition if its current contents
+ * differ from the BUP content (which is in contentbuf).
+ *
+ */
+static int
+maybe_update_bootpart (int bootfd, struct update_entry_s *ent, int is_bct)
+{
+	ssize_t n, total, remain;
+
+	if (ent->length > (ent->part->last_lba - ent->part->first_lba + 1) * 512) {
+		printf("[FAIL]\n");
+		fprintf(stderr, "Error: BUP contents too large for boot partition\n");
+		return -1;
+	}
+
+	if (lseek(bootfd, ent->part->first_lba * 512, SEEK_SET) == (off_t) -1) {
+		printf("[FAIL]\n");
+		perror(ent->partname);
+		return -1;
+	}
+	for (remain = ent->length, total = 0; remain > 0; total += n, remain -= n) {
+		n = read(bootfd, slotbuf + total, remain);
+		if (n <= 0) {
+			printf("[FAIL]\n");
+			perror("reading BCT");
+			return -1;
+		}
+	}
+	if (memcmp(contentbuf, slotbuf, ent->length) == 0) {
+		printf("[no update needed]\n");
+		return 0;
+	}
+
+	if (is_bct)
+		return update_bct(bootfd, contentbuf, ent);
+	 
+	if (lseek(bootfd, ent->part->first_lba * 512, SEEK_SET) == (off_t) -1) {
+		printf("[FAIL]\n");
+		perror(ent->partname);
+		return -1;
+	}
+
+	for (remain = ent->length, total = 0; remain > 0; total += n, remain -= n) {
+		n = write(bootfd, contentbuf + total, remain);
+		if (n <= 0) {
+			printf("[FAIL]\n");
+			perror(ent->partname);
+			return -1;
+		}
+	}
+
+	printf("[OK]\n");
+	return 0;
+
+} /* maybe_update_bootpart */
+
+/*
  * process_entry
  */
 static int
@@ -248,39 +283,27 @@ process_entry (bup_context_t *bupctx, int bootfd, struct update_entry_s *ent, in
 		printf("[OK] (dry run)\n");
 		return 0;
 	}
-	if (ent->part == NULL) {
-		fd = open(ent->devname, O_WRONLY);
-		if (fd < 0) {
-			printf("[FAIL]\n");
-			perror(ent->devname);
-			return -1;
-		}
-	} else if (strcmp(ent->partname, "BCT") == 0) {
-		return update_bct(bootfd, ent);
-	} else {
-		fd = bootfd;
-		if (lseek(fd, ent->part->first_lba * 512, SEEK_SET) == (off_t) -1) {
-			printf("[FAIL]\n");
-			fprintf(stderr, "could not seek to start of %s in boot partition\n", ent->partname);
-			return -1;
-		}
+	if (ent->part != NULL)
+		return maybe_update_bootpart(bootfd, ent, strcmp(ent->partname, "BCT") == 0);
+
+	fd = open(ent->devname, O_WRONLY);
+	if (fd < 0) {
+		printf("[FAIL]\n");
+		perror(ent->devname);
+		return -1;
 	}
 	for (remain = ent->length, total = 0; remain > 0; total += n, remain -= n) {
 		n = write(fd, contentbuf + total, remain);
 		if (n <= 0) {
 			printf("[FAIL]\n");
 			perror(ent->partname);
-			if (fd != bootfd)
-				close(fd);
+			close(fd);
 			return -1;
 		}
 	}
 
-	if (ent->part == NULL) {
-		fsync(fd);
-		close(fd);
-	}
-
+	fsync(fd);
+	close(fd);
 	printf("[OK]\n");
 	return 0;
 
@@ -581,8 +604,9 @@ main (int argc, char * const argv[])
 	}
 
 	contentbuf = malloc(largest_length);
-	if (contentbuf == NULL) {
-		perror("allocating content buffer");
+	slotbuf = malloc(largest_length);
+	if (contentbuf == NULL || slotbuf == NULL) {
+		perror("allocating content buffers");
 		goto depart;
 	}
 	contentbuf_size = largest_length;
@@ -628,6 +652,10 @@ main (int argc, char * const argv[])
 	}
 	if (reset_bootdev)
 		set_bootdev_writeable_status(bup_boot_device(bupctx), 0);
+	if (slotbuf)
+		free(slotbuf);
+	if (contentbuf)
+		free(contentbuf);
 
   depart:
 	gpt_finish(gptctx);

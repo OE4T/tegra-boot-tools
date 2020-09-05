@@ -4,10 +4,10 @@ dnl
 dnl Copyright (c) 2019, 2020 Matthew Madison
 dnl
 
-AC_INIT([tegra-boot-tools], [1.5.0])
+AC_INIT([tegra-boot-tools], [1.5.99])
 AC_DEFINE([TEGRA_BOOT_TOOLS_VERSION_MAJOR], [1], [Major version])
 AC_DEFINE([TEGRA_BOOT_TOOLS_VERSION_MINOR], [5], [Minor version])
-AC_DEFINE([TEGRA_BOOT_TOOLS_VERSION_MAINT], [0], [Maintenance level])
+AC_DEFINE([TEGRA_BOOT_TOOLS_VERSION_MAINT], [99], [Maintenance level])
 AM_INIT_AUTOMAKE([subdir-objects foreign])
 AM_SILENT_RULES([yes])
 AC_COPYRIGHT([
@@ -25,6 +25,13 @@ AC_PROG_INSTALL
 AC_ARG_WITH([systemdsystemunitdir],
     AS_HELP_STRING([--with-systemdsystemunitdir=DIR], [location for systemd service files]),
     [], [with_systemdsystemunitdir=check])
+AC_ARG_WITH([tmpfilesdir],
+    AS_HELP_STRING([--with-tmpfilesdir=DIR], [location for systemd-tmpfiles config files]),
+    [], [with_tmpfilesdir=check])
+AC_ARG_WITH([group],
+    AS_HELP_STRING([--with-group=GROUP], [group owner for lock directory]),
+    [], [with_group=root])
+AC_SUBST([LKDIRGROUP], [$with_group])
 AC_ARG_WITH([extended-sector-count],
     AS_HELP_STRING([--with-extended-sector-count=N], [number of 512-byte sectors for boot variable storage]),
     [], [with_extended_sector_count=1])
@@ -36,8 +43,11 @@ PKG_CHECK_MODULES([ZLIB], [zlib])
 AS_IF([test "x$with_systemdsystemunitdir" = "xcheck"],
     [with_systemdsystemunitdir=`$PKG_CONFIG --variable systemdsystemunitdir systemd`])
 AC_SUBST([systemdsystemunitdir], [$with_systemdsystemunitdir])
+AS_IF([test "x$with_tmpfilesdir" = "xcheck"],
+    [with_tmpfilesdir=`$PKG_CONFIG --variable tmpfilesdir systemd`])
+AC_SUBST([tmpfilesdir], [$with_tmpfilesdir])
 
-AC_CONFIG_FILES(Makefile units/update_bootinfo.service)
+AC_CONFIG_FILES(Makefile units/update_bootinfo.service tmpfiles/tegra-bootinfo.conf)
 AC_CONFIG_HEADERS([config.h])
 AC_PROG_CC
 AC_PROG_CC_C_O

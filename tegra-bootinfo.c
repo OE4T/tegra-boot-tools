@@ -47,6 +47,9 @@
  * Copyright (c) 2019-2020, Matthew Madison
  */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE 1
+#endif
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -57,7 +60,9 @@
 #include <getopt.h>
 #include <inttypes.h>
 #include <ctype.h>
+#include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/file.h>
 #include <zlib.h>
 #include "config.h"
 
@@ -111,6 +116,7 @@ struct info_var {
 
 struct devinfo_context {
 	int fd;
+	int lockfd;
 	int readonly;
 	int valid[2];
 	int current;
@@ -433,7 +439,7 @@ find_bootinfo (int readonly, struct devinfo_context **ctxp)
 	struct devinfo_context *ctx;
 	struct device_info *dp;
 	ssize_t n, cnt;
-	int i;
+	int i, dirfd;
 
 	*ctxp = NULL;
 	ctx = calloc(1, sizeof(struct devinfo_context));
@@ -446,6 +452,32 @@ find_bootinfo (int readonly, struct devinfo_context **ctxp)
 	ctx->fd = open(devinfo_dev, (readonly ? O_RDONLY : O_RDWR|O_DSYNC));
 	if (ctx->fd < 0) {
 		perror(devinfo_dev);
+		free(ctx);
+		return -1;
+	}
+	dirfd = open("/run/tegra-bootinfo", O_PATH);
+	if (dirfd < 0) {
+		if (mkdir("/run/tegra-bootinfo", 02770) < 0) {
+			perror("lockfile directory");
+			close(ctx->fd);
+			free(ctx);
+			return -1;
+		}
+		dirfd = open("/run/tegra-bootinfo", O_PATH);
+	}
+	ctx->lockfd = openat(dirfd, "lockfile", O_CREAT|O_RDWR, 0770);
+	if (ctx->lockfd < 0) {
+		perror("lockfile");
+		close(dirfd);
+		close(ctx->fd);
+		free(ctx);
+		return -1;
+	}
+	close(dirfd);
+	if (flock(ctx->lockfd, (readonly ? LOCK_SH : LOCK_EX)) < 0) {
+		perror("flock");
+		close(ctx->lockfd);
+		close(ctx->fd);
 		free(ctx);
 		return -1;
 	}
@@ -628,16 +660,25 @@ update_bootinfo (struct devinfo_context *ctx)
  *
  * Cleans up a context, freeing memory and closing open channels.
  */
-static void
-close_bootinfo (struct devinfo_context *ctx)
+static int
+close_bootinfo (struct devinfo_context *ctx, int keeplock)
 {
+	int lockfd = -1;
+
 	if (ctx == NULL)
-		return;
+		return lockfd;
+	if (keeplock)
+		lockfd = ctx->lockfd;
+	else if (ctx->lockfd >= 0)
+		close(ctx->lockfd);
 	if (ctx->fd >= 0)
 		close(ctx->fd);
 	ctx->fd = -1;
+	ctx->lockfd = -1;
 	free_vars(ctx);
 	free(ctx);
+
+	return lockfd;
 
 } /* close_bootinfo */
 
@@ -664,7 +705,7 @@ print_usage (void)
 static int
 boot_devinfo_init(int force_init)
 {
-	int fd, i;
+	int fd, i, lockfd;
 	ssize_t n, cnt;
 	struct devinfo_context *ctx;
 	static uint8_t buf[DEVINFO_BLOCK_SIZE + EXTENSION_SIZE];
@@ -672,16 +713,17 @@ boot_devinfo_init(int force_init)
 	if (find_bootinfo(0, &ctx) == 0 && ctx != NULL) {
 		if (!ctx->readonly && !force_init) {
 			fprintf(stderr, "Device info already initialized\n");
-			close_bootinfo(ctx);
+			close_bootinfo(ctx, 0);
 			return 0;
 		}
-		close_bootinfo(ctx);
+		lockfd = close_bootinfo(ctx, 1);
 	}
 
 	fd = open(devinfo_dev, O_RDWR|O_DSYNC);
 	if (fd < 0) {
 		perror(devinfo_dev);
 		set_bootdev_writeable_status(0);
+		close(lockfd);
 		return -1;
 	}
 	for (i = 0; i < 2; i++) {
@@ -707,19 +749,23 @@ boot_devinfo_init(int force_init)
 	if (i < 2) {
 		fprintf(stderr, "could not initialize bootinfo areas\n");
 		close(fd);
+		close(lockfd);
 		return -1;
 	}
 
 	ctx = calloc(1, sizeof(struct devinfo_context));
 	if (ctx == NULL) {
 		perror("calloc");
+		close(fd);
+		close(lockfd);
 		return -1;
 	}
 	ctx->fd = fd;
+	ctx->lockfd = lockfd;
 	ctx->current = -1;
 	if (update_bootinfo(ctx) < 0)
 		return -1;
-	close_bootinfo(ctx);
+	close_bootinfo(ctx, 0);
 	return 0;
 
 } /* boot_devinfo_init */
@@ -733,12 +779,12 @@ boot_successful(void)
 	if (find_bootinfo(0, &ctx) < 0) {
 		fprintf(stderr, "Could not locate device info, initializing\n");
 		if (boot_devinfo_init(1) < 0) {
-			close_bootinfo(ctx);
+			close_bootinfo(ctx, 0);
 			set_bootdev_writeable_status(0);
 			return -2;
 		}
 		if (find_bootinfo(0, &ctx) < 0) {
-			close_bootinfo(ctx);
+			close_bootinfo(ctx, 0);
 			set_bootdev_writeable_status(0);
 			return -2;
 		}
@@ -750,11 +796,11 @@ boot_successful(void)
 	ctx->curinfo.failed_boots = 0;
 	if (update_bootinfo(ctx) < 0) {
 		perror("writing boot info");
-		close_bootinfo(ctx);
+		close_bootinfo(ctx, 0);
 		set_bootdev_writeable_status(0);
 		return -2;
 	}
-	close_bootinfo(ctx);
+	close_bootinfo(ctx, 0);
 	set_bootdev_writeable_status(0);
 	return 0;
 
@@ -769,13 +815,13 @@ boot_check_status(void)
 	set_bootdev_writeable_status(1);
 	if (find_bootinfo(0, &ctx) < 0) {
 		fprintf(stderr, "Could not locate device info, initializing\n");
-		close_bootinfo(ctx);
+		close_bootinfo(ctx, 0);
 		ctx = NULL;
 		rc = boot_devinfo_init(1);
 		if (rc == 0)
 			rc = find_bootinfo(0, &ctx);
 		if (rc < 0) {
-			close_bootinfo(ctx);
+			close_bootinfo(ctx, 0);
 			set_bootdev_writeable_status(0);
 			return rc;
 		}
@@ -796,7 +842,7 @@ boot_check_status(void)
 		perror("writing boot info");
 		rc = -2;
 	}
-	close_bootinfo(ctx);
+	close_bootinfo(ctx, 0);
 	set_bootdev_writeable_status(0);
 	return rc;
 
@@ -824,7 +870,7 @@ show_bootinfo(void) {
 	       (ctx->curinfo.flags & FLAG_BOOT_IN_PROGRESS) ? "YES" : "NO",
 	       ctx->curinfo.failed_boots,
 	       ctx->curinfo.ext_sectors);
-	close_bootinfo(ctx);
+	close_bootinfo(ctx, 0);
 	return 0;
 
 } /* show_bootinfo */
@@ -857,7 +903,7 @@ show_bootvar (const char *name, int omitname)
 				break;
 		}
 	}
-	close_bootinfo(ctx);
+	close_bootinfo(ctx, 0);
 	if (!found) {
 		fprintf(stderr, "not found: %s\n", name);
 		return 1;
@@ -983,7 +1029,7 @@ set_bootvar (const char *name, const char *value, char *inputfile)
 
 	if (strlen(name) >= sizeof(ctx->namebuf)) {
 		fprintf(stderr, "error: variable name too long\n");
-		close_bootinfo(ctx);
+		close_bootinfo(ctx, 0);
 		set_bootdev_writeable_status(0);
 		return 1;
 	}
@@ -995,7 +1041,7 @@ set_bootvar (const char *name, const char *value, char *inputfile)
 		if (vallen >= sizeof(ctx->valuebuf) ||
 		    ctx->varsize + s > sizeof(ctx->valuebuf)) {
 			fprintf(stderr, "error: insufficient space for variable storage\n");
-			close_bootinfo(ctx);
+			close_bootinfo(ctx, 0);
 			set_bootdev_writeable_status(0);
 			return 1;
 		}
@@ -1005,13 +1051,13 @@ set_bootvar (const char *name, const char *value, char *inputfile)
 	if (var == NULL) {
 		if (value == NULL) {
 			fprintf(stderr, "not found: %s\n", name);
-			close_bootinfo(ctx);
+			close_bootinfo(ctx, 0);
 			return 1;
 		}
 		var = calloc(1, sizeof(struct info_var));
 		if (var == NULL) {
 			perror("calloc");
-			close_bootinfo(ctx);
+			close_bootinfo(ctx, 0);
 			set_bootdev_writeable_status(0);
 			return 1;
 		}
@@ -1037,11 +1083,11 @@ set_bootvar (const char *name, const char *value, char *inputfile)
 
 	if (update_bootinfo(ctx) < 0) {
 		fprintf(stderr, "could not update variables\n");
-		close_bootinfo(ctx);
+		close_bootinfo(ctx, 0);
 		set_bootdev_writeable_status(0);
 		return 1;
 	}
-	close_bootinfo(ctx);
+	close_bootinfo(ctx, 0);
 	set_bootdev_writeable_status(0);
 	return 0;
 

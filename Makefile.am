@@ -13,8 +13,9 @@ exec_prefix = /usr
 datadir = $(prefix)/share
 sbindir = $(exec_prefix)/sbin
 systemdsystemunitdir = @systemdsystemunitdir@
+tmpfilesdir = @tmpfilesdir@
 
-EXTRA_DIST = README.md LICENSE units/finished-booting.target units/update_bootinfo.service.in
+EXTRA_DIST = README.md LICENSE units/finished-booting.target units/update_bootinfo.service.in tmpfiles/tegra-bootinfo.conf
 
 bin_PROGRAMS = tegra-bootloader-update
 tegra_bootloader_update_SOURCES = tegra-bootloader-update.c gpt.c gpt.h bup.c bup.h soctype.c soctype.h bct_t18x.c bct_t19x.c bct.h \
@@ -85,3 +86,4 @@ tegra_bootinfo_LDADD = $(ZLIB_LIBS)
 tegra_bootinfo_LDFLAGS = $(ZLIB_LDFLAGS)
 
 systemdsystemunit_DATA = units/finished-booting.target units/update_bootinfo.service
+tmpfiles_DATA = tmpfiles/tegra-bootinfo.conf

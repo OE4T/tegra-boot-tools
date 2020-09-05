@@ -1,0 +1,2 @@
+d /run/tegra-bootinfo 02770 root @LKDIRGROUP@ - -
+f /run/tegra-bootinfo/lockfile 0770 root @LKDIRGROUP@ - -

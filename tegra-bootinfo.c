@@ -716,8 +716,11 @@ boot_devinfo_init(int force_init)
 			close_bootinfo(ctx, 0);
 			return 0;
 		}
-		lockfd = close_bootinfo(ctx, 1);
 	}
+	if (ctx != NULL)
+		lockfd = close_bootinfo(ctx, 1);
+	else
+		lockfd = -1;
 
 	fd = open(devinfo_dev, O_RDWR|O_DSYNC);
 	if (fd < 0) {

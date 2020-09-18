@@ -776,13 +776,14 @@ boot_devinfo_init(int force_init)
 static int
 boot_successful(void)
 {
-	struct devinfo_context *ctx;
+	struct devinfo_context *ctx = NULL;
 
 	set_bootdev_writeable_status(1);
 	if (find_bootinfo(0, &ctx) < 0) {
 		fprintf(stderr, "Could not locate device info, initializing\n");
+		close_bootinfo(ctx, 0);
+		ctx = NULL;
 		if (boot_devinfo_init(1) < 0) {
-			close_bootinfo(ctx, 0);
 			set_bootdev_writeable_status(0);
 			return -2;
 		}

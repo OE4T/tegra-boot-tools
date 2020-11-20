@@ -32,6 +32,10 @@ AC_ARG_WITH([group],
     AS_HELP_STRING([--with-group=GROUP], [group owner for lock directory]),
     [], [with_group=root])
 AC_SUBST([LKDIRGROUP], [$with_group])
+AC_ARG_WITH([machine-name],
+    AS_HELP_STRING([--with-machine-name=STR], [machine configuration name]),
+    [], [with_machine_name=])
+AC_SUBST([MACHINE], [$with_machine_name])
 AC_ARG_WITH([extended-sector-count],
     AS_HELP_STRING([--with-extended-sector-count=N], [number of 512-byte sectors for boot variable storage]),
     [], [with_extended_sector_count=1])
@@ -47,7 +51,7 @@ AS_IF([test "x$with_tmpfilesdir" = "xcheck"],
     [with_tmpfilesdir=`$PKG_CONFIG --variable tmpfilesdir systemd`])
 AC_SUBST([tmpfilesdir], [$with_tmpfilesdir])
 
-AC_CONFIG_FILES(Makefile units/update_bootinfo.service tmpfiles/tegra-bootinfo.conf)
+AC_CONFIG_FILES(Makefile machine-name.conf units/update_bootinfo.service tmpfiles/tegra-bootinfo.conf)
 AC_CONFIG_HEADERS([config.h])
 AC_PROG_CC
 AC_PROG_CC_C_O

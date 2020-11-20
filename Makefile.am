@@ -17,7 +17,7 @@ tmpfilesdir = @tmpfilesdir@
 
 EXTRA_DIST = README.md LICENSE units/finished-booting.target units/update_bootinfo.service.in tmpfiles/tegra-bootinfo.conf
 
-bin_PROGRAMS = tegra-bootloader-update
+bin_PROGRAMS = tegra-bootloader-update tegra-boot-control
 tegra_bootloader_update_SOURCES = tegra-bootloader-update.c smd.c smd.h gpt.c gpt.h bup.c bup.h soctype.c soctype.h bct_t18x.c bct_t19x.c bct.h \
     nvidia/nvcommon.h \
     nvidia/t18x/arse0.h \
@@ -78,6 +78,11 @@ tegra_bootloader_update_SOURCES = tegra-bootloader-update.c smd.c smd.h gpt.c gp
 tegra_bootloader_update_CFLAGS = $(ZLIB_CFLAGS) -I$(srcdir)/nvidia
 tegra_bootloader_update_LDADD = $(ZLIB_LIBS)
 tegra_bootloader_update_LDFLAGS = $(ZLIB_LDFLAGS)
+
+tegra_boot_control_SOURCES = tegra-boot-control.c smd.c smd.h gpt.c gpt.h bup.c bup.h soctype.c soctype.h
+tegra_boot_control_CFLAGS = $(ZLIB_CFLAGS)
+tegra_boot_control_LDADD = $(ZLIB_LIBS)
+tegra_boot_control_LDFLAGS = $(ZLIB_LDFLAGS)
 
 sbin_PROGRAMS = tegra-bootinfo
 tegra_bootinfo_SOURCES = tegra-bootinfo.c

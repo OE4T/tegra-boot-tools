@@ -21,6 +21,7 @@
 #include "gpt.h"
 #include "soctype.h"
 #include "bct.h"
+#include "smd.h"
 #include "config.h"
 
 static struct option options[] = {
@@ -45,7 +46,7 @@ static char *optarghelp[] = {
 
 static char *opthelp[] = {
 	"initialize the entire set of boot partitions",
-	"update only the redundant boot partitions with the specified suffix",
+	"update only the redundant boot partitions with the specified suffix (with no SMD update)",
 	"do not perform any writes, just show what would be written",
 	"specify Tegra chip ID (used only for testing)",
 	"display this help text",
@@ -366,6 +367,7 @@ main (int argc, char * const argv[])
 	int reset_bootdev;
 	gpt_context_t *gptctx;
 	bup_context_t *bupctx;
+	smd_context_t *smdctx = NULL;
 	struct update_entry_s updent;
 	void *bupiter;
 	const char *partname;
@@ -379,6 +381,8 @@ main (int argc, char * const argv[])
 	int dryrun = 0;
 	int ret = 0;
 	int missing_count;
+	int curslot = -1;
+	int slot_specified = 0;
 	const char *missing[32];
 	struct update_entry_s *ordered_entries[MAX_ENTRIES], mb1_other;
 	unsigned int i;
@@ -411,6 +415,7 @@ main (int argc, char * const argv[])
 					print_usage();
 					return 1;
 				}
+				slot_specified = 1;
 				break;
 			case 'c':
 				soctype = soctype_from_chipid(strtoul(optarg, NULL, 0));
@@ -441,11 +446,6 @@ main (int argc, char * const argv[])
 		print_usage();
 		return 1;
 	}
-	if (!initialize && suffix == NULL) {
-		fprintf(stderr, "Error: must either specify --initialize or --slot-suffix\n");
-		print_usage();
-		return 1;
-	}
 
 	if (soctype == TEGRA_SOCTYPE_INVALID) {
 		soctype = soctype_get();
@@ -461,28 +461,24 @@ main (int argc, char * const argv[])
 		return 1;
 	}
 
+	if (!slot_specified && !initialize) {
+		curslot = smd_get_current_slot();
+		if (curslot < 0) {
+			perror("retrieving current boot slot");
+			return 1;
+		}
+		if (curslot == 0)
+			suffix = "_b";
+		else
+			suffix = "";
+	}
+
 	bupctx = bup_init(argv[optind]);
 	if (bupctx == NULL) {
 		perror(argv[optind]);
 		return 1;
 	}
 
-	missing_count = bup_find_missing_entries(bupctx, missing, sizeof(missing)/sizeof(missing[0]));
-	if (missing_count < 0) {
-		fprintf(stderr, "Error checking BUP payload for missing entries\n");
-		bup_finish(bupctx);
-		return 1;
-	} else if (missing_count > 0) {
-		int i;
-		fprintf(stderr, "Error: missing entries for partition%s: %s",
-			(missing_count == 1 ? "" : "s"), missing[0]);
-		for (i = 1; i < missing_count; i++)
-			fprintf(stderr, ", %s", missing[i]);
-		fprintf(stderr, "\n       for TNSPEC %s\n", bup_tnspec(bupctx));
-		bup_finish(bupctx);
-		return 1;
-	}
-		
 	gptctx = gpt_init(bup_gpt_device(bupctx), 512);
 	if (gptctx == NULL) {
 		perror("boot sector GPT");
@@ -496,6 +492,53 @@ main (int argc, char * const argv[])
 		return 1;
 	}
 
+	if (dryrun) {
+		reset_bootdev = 0;
+		fd = open(bup_boot_device(bupctx), O_RDONLY);
+	} else {
+		reset_bootdev = set_bootdev_writeable_status(bup_boot_device(bupctx), 1);
+		fd = open(bup_boot_device(bupctx), O_RDWR);
+	}
+	if (fd < 0) {
+		perror(bup_boot_device(bupctx));
+		goto reset_and_depart;
+	}
+
+	smdctx = smd_init(gptctx, fd);
+	if (smdctx == NULL) {
+		if (initialize) {
+			smdctx = smd_new(REDUNDANCY_FULL);
+			if (smdctx == NULL)
+				perror("initializing slot metadata");
+		} else
+			perror("loading slot metadata");
+		if (smdctx == NULL)
+			goto reset_and_depart;
+	}
+
+	if (!slot_specified && smd_redundancy_level(smdctx) != REDUNDANCY_FULL) {
+		if (dryrun)
+			printf("[skip] enable redundancy in slot metadata\n");
+		else if (smd_set_redundancy_level(smdctx, REDUNDANCY_FULL) < 0) {
+			perror("enabling redundancy in slot metadata");
+			goto reset_and_depart;
+		}
+	}
+
+	missing_count = bup_find_missing_entries(bupctx, missing, sizeof(missing)/sizeof(missing[0]));
+	if (missing_count < 0) {
+		fprintf(stderr, "Error checking BUP payload for missing entries\n");
+		goto reset_and_depart;
+	} else if (missing_count > 0) {
+		int i;
+		fprintf(stderr, "Error: missing entries for partition%s: %s",
+			(missing_count == 1 ? "" : "s"), missing[0]);
+		for (i = 1; i < missing_count; i++)
+			fprintf(stderr, ", %s", missing[i]);
+		fprintf(stderr, "\n       for TNSPEC %s\n", bup_tnspec(bupctx));
+		goto reset_and_depart;
+	}
+		
 	/*
 	 * Verify that all of the partitions we need to update are acutally present,
 	 * and at the same time build the set of update tasks.
@@ -531,7 +574,7 @@ main (int argc, char * const argv[])
 					if (redundant_entry_count >= sizeof(redundant_entries)/sizeof(redundant_entries[0])) {
 						fprintf(stderr, "too many partitions to initialize\n");
 						ret = 1;
-						goto depart;
+						goto reset_and_depart;
 					}
 					redundant_entries[redundant_entry_count] = updent;
 					redundant_entries[redundant_entry_count].part = part;
@@ -546,7 +589,7 @@ main (int argc, char * const argv[])
 					if (nonredundant_entry_count >= sizeof(nonredundant_entries)/sizeof(nonredundant_entries[0])) {
 						fprintf(stderr, "too many (non-redundant) partitions to initialize\n");
 						ret = 1;
-						goto depart;
+						goto reset_and_depart;
 					}
 					nonredundant_entries[nonredundant_entry_count] = updent;
 					nonredundant_entries[nonredundant_entry_count].part = part;
@@ -556,7 +599,7 @@ main (int argc, char * const argv[])
 				if (redundant_entry_count >= sizeof(redundant_entries)/sizeof(redundant_entries[0])) {
 					fprintf(stderr, "too many partitions to update\n");
 					ret = 1;
-					goto depart;
+					goto reset_and_depart;
 				}
 				redundant_entries[redundant_entry_count] = updent;
 				strcpy(redundant_entries[redundant_entry_count].partname,
@@ -579,7 +622,7 @@ main (int argc, char * const argv[])
 			if (access(pathname, F_OK|W_OK) != 0) {
 				fprintf(stderr, "Error: cannot locate partition: %s\n", partname);
 				ret = 1;
-				goto depart;
+				goto reset_and_depart;
 			}
 			sprintf(pathname_b, "/dev/disk/by-partlabel/%s_b", partname);
 			redundant = access(pathname_b, F_OK|W_OK) == 0;
@@ -610,21 +653,9 @@ main (int argc, char * const argv[])
 	slotbuf = malloc(largest_length);
 	if (contentbuf == NULL || slotbuf == NULL) {
 		perror("allocating content buffers");
-		goto depart;
+		goto reset_and_depart;
 	}
 	contentbuf_size = largest_length;
-
-	if (dryrun) {
-		reset_bootdev = 0;
-		fd = -1;
-	} else {
-		reset_bootdev = set_bootdev_writeable_status(bup_boot_device(bupctx), 1);
-		fd = open(bup_boot_device(bupctx), O_RDWR);
-		if (fd < 0) {
-			perror(bup_boot_device(bupctx));
-			goto reset_and_depart;
-		}
-	}
 
 	order_entries(redundant_entries, ordered_entries, redundant_entry_count);
 
@@ -647,10 +678,26 @@ main (int argc, char * const argv[])
 		if (process_entry(bupctx, fd, &mb1_other, dryrun) != 0)
 			goto reset_and_depart;
 	}
+	if (dryrun) {
+		if (!slot_specified)
+			printf("[skip] mark slot %d as active\n", (initialize ? 0 : 1 - curslot));
+	} else if (!slot_specified) {
+		unsigned int newslot = (initialize ? 0 : 1 - curslot);
+		if (smd_slot_mark_active(smdctx, newslot) < 0) {
+			perror("marking new boot slot active");
+			goto reset_and_depart;
+		}
+		printf("Slot %u marked as active for next boot\n", newslot);
+		if (smd_update(smdctx, gptctx, fd, initialize) < 0)
+			perror("updating slot metadata");
+	}
 
   reset_and_depart:
+	if (smdctx)
+		smd_finish(smdctx);
 	if (fd >= 0) {
-		fsync(fd);
+		if (!dryrun)
+			fsync(fd);
 		close(fd);
 	}
 	if (reset_bootdev)
@@ -660,7 +707,6 @@ main (int argc, char * const argv[])
 	if (contentbuf)
 		free(contentbuf);
 
-  depart:
 	gpt_finish(gptctx);
 	bup_finish(bupctx);
 

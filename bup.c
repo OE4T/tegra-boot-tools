@@ -338,6 +338,9 @@ bup_init (const char *pathname)
 
 	spec_split(ctx->our_spec_str, &ctx->our_tnspec);
 
+	if (pathname == NULL)
+		return ctx;
+
 	fd = open(pathname, O_RDONLY);
 	if (fd < 0) {
 		free_context(ctx);

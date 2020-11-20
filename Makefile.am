@@ -18,7 +18,7 @@ tmpfilesdir = @tmpfilesdir@
 EXTRA_DIST = README.md LICENSE units/finished-booting.target units/update_bootinfo.service.in tmpfiles/tegra-bootinfo.conf
 
 bin_PROGRAMS = tegra-bootloader-update
-tegra_bootloader_update_SOURCES = tegra-bootloader-update.c gpt.c gpt.h bup.c bup.h soctype.c soctype.h bct_t18x.c bct_t19x.c bct.h \
+tegra_bootloader_update_SOURCES = tegra-bootloader-update.c smd.c smd.h gpt.c gpt.h bup.c bup.h soctype.c soctype.h bct_t18x.c bct_t19x.c bct.h \
     nvidia/nvcommon.h \
     nvidia/t18x/arse0.h \
     nvidia/t18x/nvboot_crypto_signatures.h \

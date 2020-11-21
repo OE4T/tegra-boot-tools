@@ -1,0 +1,11 @@
+prefix=@prefix@
+exec_prefix=${prefix}
+libdir=@libdir@
+includedir=@includedir@
+
+Name: tegra-boot-tools
+Version: @VERSION@
+Description: Library for tegra-boot-tools common functions
+Requires.private: zlib tegra-eeprom
+Libs: -L${libdir} -ltegra-boot-tools
+Cflags: -I${includedir}

@@ -19,10 +19,9 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include "bup.h"
+#include <tegra-eeprom/cvm.h>
 #include "gpt.h"
 #include "smd.h"
-#include "soctype.h"
 #include "config.h"
 
 static struct option options[] = {
@@ -69,6 +68,9 @@ typedef enum {
 	ACTION_STATUS,
 	ACTION_INVALID = 255,
 } bootctrl_action_t;
+
+static const char bootdev[] = OTABOOTDEV;
+static const char gptdev[] = OTAGPTDEV;
 
 static void
 print_usage (void)
@@ -174,7 +176,6 @@ main (int argc, char * const argv[])
 	int result = 1;
 	tegra_soctype_t soctype;
 	gpt_context_t *gptctx;
-	bup_context_t *bupctx;
 	smd_context_t *smdctx = NULL;
 	bootctrl_action_t action = ACTION_INVALID;
 	bool readonly = false;
@@ -257,7 +258,7 @@ main (int argc, char * const argv[])
 		return 1;
 	}
 
-	soctype = soctype_get();
+	soctype = cvm_soctype();
 	if (soctype == TEGRA_SOCTYPE_INVALID) {
 		fprintf(stderr, "Error: could not determine SoC type\n");
 		return 1;
@@ -265,7 +266,7 @@ main (int argc, char * const argv[])
 
 	if (soctype != TEGRA_SOCTYPE_186 &&
 	    soctype != TEGRA_SOCTYPE_194) {
-		fprintf(stderr, "Error: unsupported SoC type: %s\n", soctype_name(soctype));
+		fprintf(stderr, "Error: unsupported SoC type: %s\n", cvm_soctype_name(soctype));
 		return 1;
 	}
 
@@ -279,34 +280,26 @@ main (int argc, char * const argv[])
 		return 0;
 	}
 
-	bupctx = bup_init(NULL);
-	if (bupctx == NULL) {
-		perror("loading boot control config");
-		return 1;
-	}
-
-	gptctx = gpt_init(bup_gpt_device(bupctx), 512);
+	gptctx = gpt_init(gptdev, 512);
 	if (gptctx == NULL) {
 		perror("boot sector GPT");
-		bup_finish(bupctx);
 		return 1;
 	}
 	if (gpt_load(gptctx, GPT_LOAD_BACKUP_ONLY|GPT_NVIDIA_SPECIAL)) {
 		fprintf(stderr, "Error: cannot load boot sector partition table\n");
 		gpt_finish(gptctx);
-		bup_finish(bupctx);
 		return 1;
 	}
 
 	if (readonly) {
 		reset_bootdev = 0;
-		fd = open(bup_boot_device(bupctx), O_RDONLY);
+		fd = open(bootdev, O_RDONLY);
 	} else {
-		reset_bootdev = set_bootdev_writeable_status(bup_boot_device(bupctx), 1);
-		fd = open(bup_boot_device(bupctx), O_RDWR);
+		reset_bootdev = set_bootdev_writeable_status(bootdev, 1);
+		fd = open(bootdev, O_RDWR);
 	}
 	if (fd < 0) {
-		perror(bup_boot_device(bupctx));
+		perror(bootdev);
 		goto reset_and_depart;
 	}
 
@@ -383,10 +376,9 @@ main (int argc, char * const argv[])
 		close(fd);
 	}
 	if (reset_bootdev)
-		set_bootdev_writeable_status(bup_boot_device(bupctx), 0);
+		set_bootdev_writeable_status(bootdev, 0);
 
 	gpt_finish(gptctx);
-	bup_finish(bupctx);
 
 	return result;
 

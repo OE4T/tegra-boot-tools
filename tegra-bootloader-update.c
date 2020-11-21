@@ -17,9 +17,9 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <tegra-eeprom/cvm.h>
 #include "bup.h"
 #include "gpt.h"
-#include "soctype.h"
 #include "bct.h"
 #include "smd.h"
 #include "config.h"
@@ -28,18 +28,16 @@ static struct option options[] = {
 	{ "initialize",		no_argument,		0, 'i' },
 	{ "slot-suffix",	required_argument,	0, 's' },
 	{ "dry-run",		no_argument,		0, 'n' },
-	{ "chipid",		required_argument,	0, 'c' },
 	{ "help",		no_argument,		0, 'h' },
 	{ "version",		no_argument,		0, 0   },
 	{ 0,			0,			0, 0   }
 };
-static const char *shortopts = ":ins:c:h";
+static const char *shortopts = ":ins:h";
 
 static char *optarghelp[] = {
 	"--initialize         ",
 	"--slot-suffix        ",
 	"--dry-run            ",
-	"--chipid             ",
 	"--help               ",
 	"--version            ",
 };
@@ -48,7 +46,6 @@ static char *opthelp[] = {
 	"initialize the entire set of boot partitions",
 	"update only the redundant boot partitions with the specified suffix (with no SMD update)",
 	"do not perform any writes, just show what would be written",
-	"specify Tegra chip ID (used only for testing)",
 	"display this help text",
 	"display version information"
 };
@@ -236,7 +233,7 @@ maybe_update_bootpart (int bootfd, struct update_entry_s *ent, int is_bct)
 
 	if (is_bct)
 		return update_bct(bootfd, contentbuf, ent);
-	 
+
 	if (lseek(bootfd, ent->part->first_lba * 512, SEEK_SET) == (off_t) -1) {
 		printf("[FAIL]\n");
 		perror(ent->partname);
@@ -320,7 +317,7 @@ process_entry (bup_context_t *bupctx, int bootfd, struct update_entry_s *ent, in
  * mb2/mb2_b before BCT before mb1/mb1_b.
  */
 static void
-order_entries (struct update_entry_s *orig, struct update_entry_s **ordered, int count)	       
+order_entries (struct update_entry_s *orig, struct update_entry_s **ordered, int count)
 {
 	int i, j, mb1, mb1_b, bct, mb2, mb2_b;
 
@@ -417,14 +414,6 @@ main (int argc, char * const argv[])
 				}
 				slot_specified = 1;
 				break;
-			case 'c':
-				soctype = soctype_from_chipid(strtoul(optarg, NULL, 0));
-				if (soctype == TEGRA_SOCTYPE_INVALID) {
-					fprintf(stderr, "Error: invalid SoC type: %s\n", optarg);
-					print_usage();
-					return 1;
-				}
-				break;
 			case 'n':
 				dryrun = 1;
 				break;
@@ -448,7 +437,7 @@ main (int argc, char * const argv[])
 	}
 
 	if (soctype == TEGRA_SOCTYPE_INVALID) {
-		soctype = soctype_get();
+		soctype = cvm_soctype();
 		if (soctype == TEGRA_SOCTYPE_INVALID) {
 			fprintf(stderr, "Error: could not determine SoC type\n");
 			return 1;
@@ -457,7 +446,7 @@ main (int argc, char * const argv[])
 
 	if (soctype != TEGRA_SOCTYPE_186 &&
 	    soctype != TEGRA_SOCTYPE_194) {
-		fprintf(stderr, "Error: unsupported SoC type: %s\n", soctype_name(soctype));
+		fprintf(stderr, "Error: unsupported SoC type: %s\n", cvm_soctype_name(soctype));
 		return 1;
 	}
 
@@ -538,7 +527,7 @@ main (int argc, char * const argv[])
 		fprintf(stderr, "\n       for TNSPEC %s\n", bup_tnspec(bupctx));
 		goto reset_and_depart;
 	}
-		
+
 	/*
 	 * Verify that all of the partitions we need to update are acutally present,
 	 * and at the same time build the set of update tasks.

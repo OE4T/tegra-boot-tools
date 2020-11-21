@@ -64,6 +64,9 @@
 #include <sys/types.h>
 #include <sys/file.h>
 #include <zlib.h>
+#include <tegra-eeprom/cvm.h>
+#include "bup.h"
+#include "smd.h"
 #include "config.h"
 
 static const char DEVICE_MAGIC[8] = {'B', 'O', 'O', 'T', 'I', 'N', 'F', 'O'};
@@ -176,6 +179,8 @@ static const off_t extension_offset[2] = {
 };
 
 static const char *devinfo_dev;
+static const char bootdev[] = OTABOOTDEV;
+static const char gptdev[] = OTAGPTDEV;
 /*
  * Order here is important. Some systems may have both
  * eMMC and a SPI flash, and we prefer the eMMC.
@@ -239,17 +244,17 @@ static char *opthelp[] = {
  * but they typically do not have the sysfs entry to update.
  */
 static int
-set_bootdev_writeable_status (int make_writeable)
+set_bootdev_writeable_status (const char *dev, int make_writeable)
 {
 	char pathname[64];
 	char buf[1];
 	int fd, is_writeable;
 
-	if (devinfo_dev == NULL) {
+	if (dev == NULL) {
 		fprintf(stderr, "%s: no devinfo device set\n", __func__);
 		return 0;
 	}
-	sprintf(pathname, "/sys/block/%s/force_ro", devinfo_dev + 5);
+	sprintf(pathname, "/sys/block/%s/force_ro", dev + 5);
 	fd = open(pathname, O_RDWR);
 	if (fd < 0)
 		return 0;
@@ -626,27 +631,27 @@ update_bootinfo (struct devinfo_context *ctx)
 
 	if (lseek(ctx->fd, devinfo_offset[idx], SEEK_END) < 0) {
 		perror(devinfo_dev);
-		set_bootdev_writeable_status(0);
+		set_bootdev_writeable_status(devinfo_dev, 0);
 		return -1;
 	}
 	for (n = 0; n < DEVINFO_BLOCK_SIZE; n += cnt) {
 		cnt = write(ctx->fd, ctx->infobuf[idx] + n, DEVINFO_BLOCK_SIZE-n);
 		if (cnt < 0) {
 			perror(devinfo_dev);
-			set_bootdev_writeable_status(0);
+			set_bootdev_writeable_status(devinfo_dev, 0);
 			return -1;
 		}
 	}
 	if (lseek(ctx->fd, extension_offset[idx], SEEK_END) < 0) {
 		perror(devinfo_dev);
-		set_bootdev_writeable_status(0);
+		set_bootdev_writeable_status(devinfo_dev, 0);
 		return -1;
 	}
 	for (n = 0; n < EXTENSION_SIZE; n += cnt) {
 		cnt = write(ctx->fd, ctx->infobuf[idx] + DEVINFO_BLOCK_SIZE + n, EXTENSION_SIZE-n);
 		if (cnt < 0) {
 			perror(devinfo_dev);
-			set_bootdev_writeable_status(0);
+			set_bootdev_writeable_status(devinfo_dev, 0);
 			return -1;
 		}
 	}
@@ -725,7 +730,7 @@ boot_devinfo_init(int force_init)
 	fd = open(devinfo_dev, O_RDWR|O_DSYNC);
 	if (fd < 0) {
 		perror(devinfo_dev);
-		set_bootdev_writeable_status(0);
+		set_bootdev_writeable_status(devinfo_dev, 0);
 		close(lockfd);
 		return -1;
 	}
@@ -774,22 +779,80 @@ boot_devinfo_init(int force_init)
 } /* boot_devinfo_init */
 
 static int
+mark_nv_boot_successful (void)
+{
+	tegra_soctype_t soctype = cvm_soctype();
+	gpt_context_t *gptctx;
+	smd_context_t *smdctx = NULL;
+	int curslot, reset_bootdev, fd;
+	int ret = -1;
+
+	if (soctype != TEGRA_SOCTYPE_186 && soctype != TEGRA_SOCTYPE_194)
+		return 0;
+
+	curslot = smd_get_current_slot();
+	if (curslot < 0) {
+		perror("smd_get_current_slot");
+		return ret;
+	}
+	gptctx = gpt_init(gptdev, 512);
+	if (gptctx == NULL) {
+		perror("gpt_init");
+		return ret;
+	}
+	if (gpt_load(gptctx, GPT_LOAD_BACKUP_ONLY|GPT_NVIDIA_SPECIAL)) {
+		perror("gpt_load");
+		gpt_finish(gptctx);
+		return ret;
+	}
+	reset_bootdev = set_bootdev_writeable_status(bootdev, 1);
+	fd = open(bootdev, O_RDWR);
+	if (fd < 0) {
+		perror(bootdev);
+		goto reset_and_depart;
+	}
+	smdctx = smd_init(gptctx, fd);
+	if (smdctx == NULL) {
+		perror("smd_init");
+		goto reset_and_depart;
+	}
+	if (smd_slot_mark_successful(smdctx, curslot) == 0 && smd_update(smdctx, gptctx, fd, false) == 0) {
+		ret = 0;
+	} else
+		perror("marking boot slot successful");
+
+reset_and_depart:
+	if (smdctx != NULL)
+		smd_finish(smdctx);
+	fsync(fd);
+	close(fd);
+	if (reset_bootdev)
+		set_bootdev_writeable_status(bootdev, 0);
+	gpt_finish(gptctx);
+	return ret;
+
+} /* mark_nv_boot_successful */
+
+static int
 boot_successful(void)
 {
 	struct devinfo_context *ctx = NULL;
 
-	set_bootdev_writeable_status(1);
+	if (mark_nv_boot_successful() < 0)
+		return 1;
+
+	set_bootdev_writeable_status(devinfo_dev, 1);
 	if (find_bootinfo(0, &ctx) < 0) {
 		fprintf(stderr, "Could not locate device info, initializing\n");
 		close_bootinfo(ctx, 0);
 		ctx = NULL;
 		if (boot_devinfo_init(1) < 0) {
-			set_bootdev_writeable_status(0);
+			set_bootdev_writeable_status(devinfo_dev, 0);
 			return -2;
 		}
 		if (find_bootinfo(0, &ctx) < 0) {
 			close_bootinfo(ctx, 0);
-			set_bootdev_writeable_status(0);
+			set_bootdev_writeable_status(devinfo_dev, 0);
 			return -2;
 		}
 	}
@@ -801,11 +864,11 @@ boot_successful(void)
 	if (update_bootinfo(ctx) < 0) {
 		perror("writing boot info");
 		close_bootinfo(ctx, 0);
-		set_bootdev_writeable_status(0);
+		set_bootdev_writeable_status(devinfo_dev, 0);
 		return -2;
 	}
 	close_bootinfo(ctx, 0);
-	set_bootdev_writeable_status(0);
+	set_bootdev_writeable_status(devinfo_dev, 0);
 	return 0;
 
 } /* boot_successful */
@@ -816,7 +879,9 @@ boot_check_status(void)
 	struct devinfo_context *ctx = NULL;
 	int rc = 0;
 
-	set_bootdev_writeable_status(1);
+	if (mark_nv_boot_successful() < 0)
+		return 1;
+	set_bootdev_writeable_status(devinfo_dev, 1);
 	if (find_bootinfo(0, &ctx) < 0) {
 		fprintf(stderr, "Could not locate device info, initializing\n");
 		close_bootinfo(ctx, 0);
@@ -826,7 +891,7 @@ boot_check_status(void)
 			rc = find_bootinfo(0, &ctx);
 		if (rc < 0) {
 			close_bootinfo(ctx, 0);
-			set_bootdev_writeable_status(0);
+			set_bootdev_writeable_status(devinfo_dev, 0);
 			return rc;
 		}
 	}
@@ -847,7 +912,7 @@ boot_check_status(void)
 		rc = -2;
 	}
 	close_bootinfo(ctx, 0);
-	set_bootdev_writeable_status(0);
+	set_bootdev_writeable_status(devinfo_dev, 0);
 	return rc;
 
 } /* boot_check_status */
@@ -1024,17 +1089,17 @@ set_bootvar (const char *name, const char *value, char *inputfile)
 			}
 		}
 	}
-	set_bootdev_writeable_status(1);
+	set_bootdev_writeable_status(devinfo_dev, 1);
 	if (find_bootinfo(0, &ctx) < 0) {
 		fprintf(stderr, "Could not locate device info\n");
-		set_bootdev_writeable_status(0);
+		set_bootdev_writeable_status(devinfo_dev, 0);
 		return -2;
 	}
 
 	if (strlen(name) >= sizeof(ctx->namebuf)) {
 		fprintf(stderr, "error: variable name too long\n");
 		close_bootinfo(ctx, 0);
-		set_bootdev_writeable_status(0);
+		set_bootdev_writeable_status(devinfo_dev, 0);
 		return 1;
 	}
 
@@ -1046,7 +1111,7 @@ set_bootvar (const char *name, const char *value, char *inputfile)
 		    ctx->varsize + s > sizeof(ctx->valuebuf)) {
 			fprintf(stderr, "error: insufficient space for variable storage\n");
 			close_bootinfo(ctx, 0);
-			set_bootdev_writeable_status(0);
+			set_bootdev_writeable_status(devinfo_dev, 0);
 			return 1;
 		}
 		strcpy(ctx->valuebuf, value);
@@ -1062,7 +1127,7 @@ set_bootvar (const char *name, const char *value, char *inputfile)
 		if (var == NULL) {
 			perror("calloc");
 			close_bootinfo(ctx, 0);
-			set_bootdev_writeable_status(0);
+			set_bootdev_writeable_status(devinfo_dev, 0);
 			return 1;
 		}
 		var->name = ctx->namebuf;
@@ -1088,11 +1153,11 @@ set_bootvar (const char *name, const char *value, char *inputfile)
 	if (update_bootinfo(ctx) < 0) {
 		fprintf(stderr, "could not update variables\n");
 		close_bootinfo(ctx, 0);
-		set_bootdev_writeable_status(0);
+		set_bootdev_writeable_status(devinfo_dev, 0);
 		return 1;
 	}
 	close_bootinfo(ctx, 0);
-	set_bootdev_writeable_status(0);
+	set_bootdev_writeable_status(devinfo_dev, 0);
 	return 0;
 
 } /* set_bootvar */
@@ -1187,9 +1252,9 @@ main (int argc, char * const argv[])
 	case show:
 		return show_bootinfo();
 	case init:
-		set_bootdev_writeable_status(1);
+		set_bootdev_writeable_status(devinfo_dev, 1);
 		ret = boot_devinfo_init(force_init);
-		set_bootdev_writeable_status(0);
+		set_bootdev_writeable_status(devinfo_dev, 0);
 		return ret;
 	case showvar:
 		if (optind >= argc)

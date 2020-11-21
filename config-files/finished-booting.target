@@ -1,5 +1,0 @@
-[Unit]
-Description=System boot completely finished
-Requires=multi-user.target
-After=multi-user.target
-AllowIsolate=yes

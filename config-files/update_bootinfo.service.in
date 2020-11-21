@@ -1,6 +1,8 @@
 [Unit]
 Description=Record successful system boot
-After=multi-user.target
+Requires=boot-complete.target
+After=boot-complete.target
+ConditionPathExists=!@sysconfdir@/initrd-release
 
 [Service]
 Type=oneshot
@@ -8,4 +10,4 @@ ExecStart=@sbindir@/tegra-bootinfo -b
 RemainAfterExit=yes
 
 [Install]
-WantedBy=finished-booting.target
+WantedBy=basic.target

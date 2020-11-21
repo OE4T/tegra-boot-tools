@@ -1,0 +1,14 @@
+[Unit]
+Description=System boot count check
+DefaultDependencies=no
+Requires=@BOOTDEVS@
+After=@BOOTDEVS@
+Before=cryptsetup-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=@sbindir@/bootcountcheck
+
+[Install]
+WantedBy=sysinit.target

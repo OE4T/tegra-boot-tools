@@ -60,7 +60,12 @@ AS_IF([test "x$with_tmpfilesdir" = "xcheck"],
     [with_tmpfilesdir=`$PKG_CONFIG --variable tmpfilesdir systemd`])
 AC_SUBST([tmpfilesdir], [$with_tmpfilesdir])
 
-AC_CONFIG_FILES(Makefile tegra-boot-tools.pc config-files/machine-name.conf config-files/update_bootinfo.service config-files/tegra-bootinfo.conf)
+AS_IF([test "$with_gptdev" = "$with_bootdev"],
+    [bootdevs="dev-`echo $with_gptdev | cut -d/ -f3`.device"],
+    [bootdevs="dev-`echo $with_bootdev | cut -d/ -f3`.device dev-`echo $with_gptdev | cut -d/ -f3`.device"])
+AC_SUBST([BOOTDEVS], [$bootdevs])
+
+AC_CONFIG_FILES([Makefile tegra-boot-tools.pc config-files/machine-name.conf config-files/tegra-bootinfo.conf])
 AC_CONFIG_HEADERS([config.h])
 AC_PROG_CC
 AC_PROG_CC_C_O

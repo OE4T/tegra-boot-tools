@@ -14,7 +14,14 @@ tbtdir = $(datadir)/tegra-boot-tools
 tbtincdir = $(includedir)/tegra-boot-tools
 pkgconfigdir = $(libdir)/pkgconfig
 
-EXTRA_DIST = README.md LICENSE
+EXTRA_DIST = README.md LICENSE config-files/update_bootinfo.service.in config-files/bootcountcheck.service.in
+
+# Needed for performing substitutions in systemd service units,
+# which can't be done by AC_CONFIG_FILES.
+do_subst = sed -e's,[@]bindir[@],$(bindir),g' \
+               -e's,[@]sbindir[@],$(sbindir),g' \
+               -e's,[@]sysconfdir[@],$(sysconfdir),g' \
+               -e's,[@]BOOTDEVS[@],$(BOOTDEVS),g'
 
 lib_LTLIBRARIES = libtegra-boot-tools.la
 libtegra_boot_tools_la_SOURCES = smd.c smd.h gpt.c gpt.h bup.c bup.h
@@ -24,7 +31,7 @@ libtegra_boot_tools_la_LDFLAGS = $(ZLIB_LDFLAGS) $(TEGRA_EEPROM_LDFLAGS)
 tbtinc_HEADERS = smd.h gpt.h bup.h
 pkgconfig_DATA = tegra-boot-tools.pc
 
-bin_PROGRAMS = tegra-bootloader-update tegra-boot-control
+bin_PROGRAMS = tegra-bootloader-update tegra-boot-control tegra-bootinfo
 tegra_bootloader_update_SOURCES = tegra-bootloader-update.c bct_t18x.c bct_t19x.c bct.h \
     nvidia/nvcommon.h \
     nvidia/t18x/arse0.h \
@@ -91,12 +98,21 @@ tegra_boot_control_CFLAGS = $(TEGRA_EEPROM_CFLAGS)
 tegra_boot_control_LDADD = libtegra-boot-tools.la $(TEGRA_EEPROM_LIBS)
 tegra_boot_control_LDFLAGS = $(TEGRA_EEPROM_LDFLAGS)
 
-sbin_PROGRAMS = tegra-bootinfo
 tegra_bootinfo_SOURCES = tegra-bootinfo.c
 tegra_bootinfo_CFLAGS = $(ZLIB_CFLAGS) $(TEGRA_EEPROM_CFLAGS)
 tegra_bootinfo_LDADD = libtegra-boot-tools.la $(ZLIB_LIBS) $(TEGRA_EEPROM_LIBS)
 tegra_bootinfo_LDFLAGS = -static $(ZLIB_LDFLAGS) $(TEGRA_EEPROM_LDFLAGS)
 
-systemdsystemunit_DATA = config-files/update_bootinfo.service
+systemdsystemunit_DATA = config-files/update_bootinfo.service config-files/bootcountcheck.service
+
+config-files/update_bootinfo.service: config-files/update_bootinfo.service.in Makefile
+	$(do_subst) < $(srcdir)/config-files/update_bootinfo.service.in > config-files/update_bootinfo.service
+config-files/bootcountcheck.service: config-files/bootcountcheck.service.in Makefile
+	$(do_subst) < $(srcdir)/config-files/bootcountcheck.service.in > config-files/bootcountcheck.service
+
 tmpfiles_DATA = config-files/tegra-bootinfo.conf
 tbt_DATA = config-files/machine-name.conf
+
+dist_sbin_SCRIPTS = scripts/bootcountcheck
+
+CLEANFILES = $(systemdsystemunit_DATA)

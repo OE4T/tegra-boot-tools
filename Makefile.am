@@ -16,7 +16,7 @@ systemdsystemunitdir = @systemdsystemunitdir@
 tmpfilesdir = @tmpfilesdir@
 tbtdir = $(datadir)/tegra-boot-tools
 
-EXTRA_DIST = README.md LICENSE units/finished-booting.target units/update_bootinfo.service.in tmpfiles/tegra-bootinfo.conf machine-name.conf.in
+EXTRA_DIST = README.md LICENSE config-files/finished-booting.target
 
 bin_PROGRAMS = tegra-bootloader-update tegra-boot-control
 tegra_bootloader_update_SOURCES = tegra-bootloader-update.c smd.c smd.h gpt.c gpt.h bup.c bup.h soctype.c soctype.h bct_t18x.c bct_t19x.c bct.h \
@@ -91,6 +91,6 @@ tegra_bootinfo_CFLAGS = $(ZLIB_CFLAGS)
 tegra_bootinfo_LDADD = $(ZLIB_LIBS)
 tegra_bootinfo_LDFLAGS = $(ZLIB_LDFLAGS)
 
-systemdsystemunit_DATA = units/finished-booting.target units/update_bootinfo.service
-tmpfiles_DATA = tmpfiles/tegra-bootinfo.conf
-tbt_DATA = machine-name.conf
+systemdsystemunit_DATA = config-files/finished-booting.target config-files/update_bootinfo.service
+tmpfiles_DATA = config-files/tegra-bootinfo.conf
+tbt_DATA = config-files/machine-name.conf

@@ -8,18 +8,24 @@ ACLOCAL_AMFLAGS = -I m4
 SUBDIRS =
 DIST_SUBDIRS =
 
-prefix = /usr
-exec_prefix = /usr
-datadir = $(prefix)/share
-sbindir = $(exec_prefix)/sbin
 systemdsystemunitdir = @systemdsystemunitdir@
 tmpfilesdir = @tmpfilesdir@
 tbtdir = $(datadir)/tegra-boot-tools
+tbtincdir = $(includedir)/tegra-boot-tools
+pkgconfigdir = $(libdir)/pkgconfig
 
 EXTRA_DIST = README.md LICENSE
 
+lib_LTLIBRARIES = libtegra-boot-tools.la
+libtegra_boot_tools_la_SOURCES = smd.c smd.h gpt.c gpt.h bup.c bup.h
+libtegra_boot_tools_la_CFLAGS = $(ZLIB_CFLAGS) $(TEGRA_EEPROM_CFLAGS)
+libtegra_boot_tools_la_LIBADD = $(ZLIB_LIBS) $(TEGRA_EEPROM_LIBS)
+libtegra_boot_tools_la_LDFLAGS = $(ZLIB_LDFLAGS) $(TEGRA_EEPROM_LDFLAGS)
+tbtinc_HEADERS = smd.h gpt.h bup.h
+pkgconfig_DATA = tegra-boot-tools.pc
+
 bin_PROGRAMS = tegra-bootloader-update tegra-boot-control
-tegra_bootloader_update_SOURCES = tegra-bootloader-update.c smd.c smd.h gpt.c gpt.h bup.c bup.h soctype.c soctype.h bct_t18x.c bct_t19x.c bct.h \
+tegra_bootloader_update_SOURCES = tegra-bootloader-update.c bct_t18x.c bct_t19x.c bct.h \
     nvidia/nvcommon.h \
     nvidia/t18x/arse0.h \
     nvidia/t18x/nvboot_crypto_signatures.h \
@@ -76,20 +82,20 @@ tegra_bootloader_update_SOURCES = tegra-bootloader-update.c smd.c smd.h gpt.c gp
     nvidia/t19x/nvboot_config.h \
     nvidia/t19x/nvboot_crypto_rsa_param.h \
     nvidia/t19x/nvboot_boot_component.h
-tegra_bootloader_update_CFLAGS = $(ZLIB_CFLAGS) -I$(srcdir)/nvidia
-tegra_bootloader_update_LDADD = $(ZLIB_LIBS)
-tegra_bootloader_update_LDFLAGS = $(ZLIB_LDFLAGS)
+tegra_bootloader_update_CFLAGS = $(TEGRA_EEPROM_CFLAGS) -I$(srcdir)/nvidia
+tegra_bootloader_update_LDADD = libtegra-boot-tools.la $(TEGRA_EEPROM_LIBS)
+tegra_bootloader_update_LDFLAGS = $(TEGRA_EEPROM_LDFLAGS)
 
-tegra_boot_control_SOURCES = tegra-boot-control.c smd.c smd.h gpt.c gpt.h bup.c bup.h soctype.c soctype.h
-tegra_boot_control_CFLAGS = $(ZLIB_CFLAGS)
-tegra_boot_control_LDADD = $(ZLIB_LIBS)
-tegra_boot_control_LDFLAGS = $(ZLIB_LDFLAGS)
+tegra_boot_control_SOURCES = tegra-boot-control.c
+tegra_boot_control_CFLAGS = $(TEGRA_EEPROM_CFLAGS)
+tegra_boot_control_LDADD = libtegra-boot-tools.la $(TEGRA_EEPROM_LIBS)
+tegra_boot_control_LDFLAGS = $(TEGRA_EEPROM_LDFLAGS)
 
 sbin_PROGRAMS = tegra-bootinfo
 tegra_bootinfo_SOURCES = tegra-bootinfo.c
-tegra_bootinfo_CFLAGS = $(ZLIB_CFLAGS)
-tegra_bootinfo_LDADD = $(ZLIB_LIBS)
-tegra_bootinfo_LDFLAGS = $(ZLIB_LDFLAGS)
+tegra_bootinfo_CFLAGS = $(ZLIB_CFLAGS) $(TEGRA_EEPROM_CFLAGS)
+tegra_bootinfo_LDADD = libtegra-boot-tools.la $(ZLIB_LIBS) $(TEGRA_EEPROM_LIBS)
+tegra_bootinfo_LDFLAGS = -static $(ZLIB_LDFLAGS) $(TEGRA_EEPROM_LDFLAGS)
 
 systemdsystemunit_DATA = config-files/update_bootinfo.service
 tmpfiles_DATA = config-files/tegra-bootinfo.conf

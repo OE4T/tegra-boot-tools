@@ -36,6 +36,14 @@ AC_ARG_WITH([machine-name],
     AS_HELP_STRING([--with-machine-name=STR], [machine configuration name]),
     [], [with_machine_name=])
 AC_SUBST([MACHINE], [$with_machine_name])
+AC_ARG_WITH([bootdev],
+    AS_HELP_STRING([--with-bootdev=STR], [device name for boot partitions]),
+    [], [with_bootdev=/dev/mmcblk0boot0])
+AC_DEFINE_UNQUOTED([OTABOOTDEV], ["$with_bootdev"], [Device where boot partitions are stored])
+AC_ARG_WITH([gptdev],
+    AS_HELP_STRING([--with-gptdev=STR], [device name for boot partition table]),
+    [], [with_gptdev=/dev/mmcblk0boot1])
+AC_DEFINE_UNQUOTED([OTAGPTDEV], ["$with_gptdev"], [Device where pseudo-GPT for boot partitions is stored])
 AC_ARG_WITH([extended-sector-count],
     AS_HELP_STRING([--with-extended-sector-count=N], [number of 512-byte sectors for boot variable storage]),
     [], [with_extended_sector_count=1])
@@ -43,6 +51,7 @@ AC_DEFINE_UNQUOTED([EXTENSION_SECTOR_COUNT], [$with_extended_sector_count], [Num
 
 PKG_PROG_PKG_CONFIG([0.29])
 PKG_CHECK_MODULES([ZLIB], [zlib])
+PKG_CHECK_MODULES([TEGRA_EEPROM], [tegra-eeprom])
 
 AS_IF([test "x$with_systemdsystemunitdir" = "xcheck"],
     [with_systemdsystemunitdir=`$PKG_CONFIG --variable systemdsystemunitdir systemd`])
@@ -51,7 +60,7 @@ AS_IF([test "x$with_tmpfilesdir" = "xcheck"],
     [with_tmpfilesdir=`$PKG_CONFIG --variable tmpfilesdir systemd`])
 AC_SUBST([tmpfilesdir], [$with_tmpfilesdir])
 
-AC_CONFIG_FILES(Makefile config-files/machine-name.conf config-files/update_bootinfo.service config-files/tegra-bootinfo.conf)
+AC_CONFIG_FILES(Makefile tegra-boot-tools.pc config-files/machine-name.conf config-files/update_bootinfo.service config-files/tegra-bootinfo.conf)
 AC_CONFIG_HEADERS([config.h])
 AC_PROG_CC
 AC_PROG_CC_C_O

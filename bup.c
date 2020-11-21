@@ -15,7 +15,9 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <tegra-eeprom/boardspec.h>
 #include "bup.h"
+#include "config.h"
 
 /*
  * Structures for parsing and matching
@@ -84,92 +86,17 @@ struct bup_entry_s {
 struct bup_context_s {
 	int fd;
 	void *buffer;
-	char *our_spec_str;
+	char our_spec_str[128];
 	struct tnspec_s our_tnspec;
-	char *bootdev;
-	char *gptdev;
 	unsigned int entry_count;
 	struct bup_entry_s *entries;
 };
 
 static const uint8_t bup_magic[16] = "NVIDIA__BLOB__V2";
 static const uint32_t bup_version = 0x00020000;
+static const char bootdev[] = OTABOOTDEV;
+static const char gptdev[] = OTAGPTDEV;
 
-
-/*
- * load_configuration
- *
- * Reads the boot control settings from NVIDIA's
- * configuration file.
- */
-static int
-load_configuration (bup_context_t *ctx)
-{
-	int fd;
-	ssize_t n;
-	struct stat st;
-	char *start, *line, *lineend;
-	char *conffile;
-
-	conffile = getenv("NV_BOOT_CONTROL");
-	if (conffile == NULL)
-		conffile = "/etc/nv_boot_control.conf";
-	fd = open(conffile, O_RDONLY);
-	if (fd < 0)
-		return -1;
-	if (fstat(fd, &st) != 0) {
-		close(fd);
-		return -1;
-	}
-	if (st.st_size >= BUFFERSIZE-1) {
-		close(fd);
-		errno = EFBIG;
-		return -1;
-	}
-	n = read(fd, ctx->buffer, BUFFERSIZE-2);
-	if (n <= 0) {
-		close(fd);
-		return -1;
-	}
-	close(fd);
-	start = ctx->buffer;
-	*(start + n) = '\n';
-	*(start + n+1) = '\0';
-	/*
-	 * config file format is
-	 *
-	 * VARNAME<whitespace>VALUE
-	 *
-	 * but allow for leading and trailing whitespace,
-	 * and trim it.
-	 */
-	for (line = start; *line != '\0'; line = lineend + 1) {
-		char *var, *val, *cp;
-		lineend = strchr(line, '\n');
-		*lineend = '\0';
-		for (cp = line; *cp == '\t' || *cp == ' '; cp++);
-		if (*cp == '\0')
-			continue;
-		var = cp;
-		for (cp += 1; *cp != '\t' && *cp != ' '; cp++);
-		if (*cp == '\0')
-			continue;
-		*cp = '\0';
-		for (cp += 1; *cp == '\t' || *cp == ' '; cp++);
-		val = cp;
-		for (cp = lineend-1; cp > val && (*cp == '\t' || *cp == ' '); cp--);
-		*(cp + 1) = '\0';
-		if (strcmp(var, "TEGRA_OTA_BOOT_DEVICE") == 0)
-			ctx->bootdev = strdup(val);
-		else if (strcmp(var, "TEGRA_OTA_GPT_DEVICE") == 0)
-			ctx->gptdev = strdup(val);
-		else if (strcmp(var, "TNSPEC") == 0)
-			ctx->our_spec_str = strdup(val);
-	}
-
-	return 0;
-
-} /* load_configuration */
 
 /*
  * Specs are of the form
@@ -283,12 +210,6 @@ rstrip (char *out, const char *in, size_t len)
 static void
 free_context (bup_context_t *ctx)
 {
-	if (ctx->bootdev)
-		free(ctx->bootdev);
-	if (ctx->gptdev)
-		free(ctx->gptdev);
-	if (ctx->our_spec_str)
-		free(ctx->our_spec_str);
 	if (ctx->fd >= 0)
 		close(ctx->fd);
 	if (ctx->entries)
@@ -315,7 +236,7 @@ bup_init (const char *pathname)
 	struct stat st;
 	off_t payload_size;
 	uint8_t *bufp;
-	int i;
+	int i, len;
 
 	ctx = malloc(sizeof(*ctx));
 	if (ctx == NULL)
@@ -327,15 +248,12 @@ bup_init (const char *pathname)
 		free(ctx);
 		return NULL;
 	}
-	if (load_configuration(ctx) != 0) {
+	len = tegra_boardspec(ctx->our_spec_str, sizeof(ctx->our_spec_str)-1);
+	if (len < 0) {
 		free_context(ctx);
 		return NULL;
 	}
-	if (ctx->bootdev == NULL || ctx->gptdev == NULL || ctx->our_spec_str == NULL) {
-		free_context(ctx);
-		return NULL;
-	}
-
+	ctx->our_spec_str[len] = '\0';
 	spec_split(ctx->our_spec_str, &ctx->our_tnspec);
 
 	if (pathname == NULL)
@@ -385,17 +303,17 @@ bup_init (const char *pathname)
 		return NULL;
 	}
 	while (totsize > n) {
-		ssize_t i = read(fd, (uint8_t *)ctx->buffer + n, totsize - n);
-		if (i < 0) {
+		ssize_t rlen = read(fd, (uint8_t *)ctx->buffer + n, totsize - n);
+		if (rlen < 0) {
 			free_context(ctx);
 			return NULL;
 		}
-		if (i == 0) {
+		if (rlen == 0) {
 			fprintf(stderr, "%s: premature EOF\n", pathname);
 			free_context(ctx);
 			return NULL;
 		}
-		n += i;
+		n += rlen;
 	}
 	ctx->entries = malloc(hdr->entry_count * sizeof(struct bup_entry_s));
 	if (ctx->entries == NULL) {
@@ -445,7 +363,7 @@ bup_finish (bup_context_t *ctx)
 const char *
 bup_gpt_device (bup_context_t *ctx)
 {
-	return ctx->gptdev;
+	return gptdev;
 
 } /* bup_gpt_device */
 
@@ -457,7 +375,7 @@ bup_gpt_device (bup_context_t *ctx)
 const char *
 bup_boot_device (bup_context_t *ctx)
 {
-	return ctx->bootdev;
+	return bootdev;
 
 } /* bup_boot_device */
 

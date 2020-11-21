@@ -6,7 +6,7 @@ ConditionPathExists=!@sysconfdir@/initrd-release
 
 [Service]
 Type=oneshot
-ExecStart=@sbindir@/tegra-bootinfo -b
+ExecStart=@bindir@/tegra-bootinfo -b
 RemainAfterExit=yes
 
 [Install]

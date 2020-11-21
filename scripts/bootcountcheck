@@ -1,0 +1,17 @@
+#!/bin/sh
+tegra-bootinfo --check-status
+if [ $? = 77 ]; then
+    curslot=$(tegra-boot-control --current-slot)
+    if [ -n "$curslot" ]; then
+	slot=$(expr 1 - $curslot)
+	echo "Switching to boot slot $slot"
+	tegra-boot-control --set-active $slot
+	sync
+	reboot -f
+    else
+	echo "ERROR: failed to get current boot slot" >&2
+	exit 1
+    fi
+fi
+
+exit 0

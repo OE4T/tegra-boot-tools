@@ -36,6 +36,10 @@ AC_ARG_WITH([machine-name],
     AS_HELP_STRING([--with-machine-name=STR], [machine configuration name]),
     [], [with_machine_name=])
 AC_SUBST([MACHINE], [$with_machine_name])
+AC_ARG_WITH([rootfsdev],
+    AS_HELP_STRING([--with-rootfsdev=STR], [device name for booting rootfs (without /dev)]),
+    [], [with_rootfsdev=mmcblk0p1])
+AC_SUBST([ROOTFSDEV], [$with_rootfsdev])
 AC_ARG_WITH([bootdev],
     AS_HELP_STRING([--with-bootdev=STR], [device name for boot partitions]),
     [], [with_bootdev=/dev/mmcblk0boot0])
@@ -65,7 +69,7 @@ AS_IF([test "$with_gptdev" = "$with_bootdev"],
     [bootdevs="dev-`echo $with_bootdev | cut -d/ -f3`.device dev-`echo $with_gptdev | cut -d/ -f3`.device"])
 AC_SUBST([BOOTDEVS], [$bootdevs])
 
-AC_CONFIG_FILES([Makefile tegra-boot-tools.pc config-files/machine-name.conf config-files/tegra-bootinfo.conf])
+AC_CONFIG_FILES([Makefile tegra-boot-tools.pc config-files/machine-name.conf config-files/rootfsdev.conf config-files/tegra-bootinfo.conf])
 AC_CONFIG_HEADERS([config.h])
 AC_PROG_CC
 AC_PROG_CC_C_O

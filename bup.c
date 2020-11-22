@@ -15,6 +15,8 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <limits.h>
+#include <ctype.h>
 #include <tegra-eeprom/boardspec.h>
 #include "bup.h"
 #include "config.h"
@@ -96,7 +98,10 @@ static const uint8_t bup_magic[16] = "NVIDIA__BLOB__V2";
 static const uint32_t bup_version = 0x00020000;
 static const char bootdev[] = OTABOOTDEV;
 static const char gptdev[] = OTAGPTDEV;
-
+#define QUOTE(m_) #m_
+#define XQUOTE(m_) QUOTE(m_)
+static const char machineconf[] = XQUOTE(CONFIGPATH) "/machine-name.conf";
+static const char rootfsconf[] = XQUOTE(CONFIGPATH) "/rootfsdev.conf";
 
 /*
  * Specs are of the form
@@ -205,6 +210,56 @@ rstrip (char *out, const char *in, size_t len)
 } /* rstrip */
 
 /*
+ * construct_tnspec
+ *
+ * Constructs the TNSPEC for the current system from
+ * the EEPROM boardspec, machine name from our config file,
+ * and our boot device from our config file.
+ */
+static int
+construct_tnspec (char *buf, size_t bufsiz)
+{
+	char machinename[128], rootfsdev[128];
+	char boardspec[128];
+	int fd;
+	ssize_t n;
+
+	n = tegra_boardspec(boardspec, sizeof(boardspec)-1);
+	if (n < 0)
+		return n;
+	boardspec[n] = '\0';
+
+	fd = open(machineconf, O_RDONLY);
+	if (fd < 0)
+		return fd;
+	n = read(fd, machinename, sizeof(machinename)-1);
+	close(fd);
+	if (n < 0)
+		return n;
+	while (n > 0 && !isgraph(machinename[n-1]))
+		n -= 1;
+	machinename[n] = '\0';
+
+	fd = open(rootfsconf, O_RDONLY);
+	if (fd < 0)
+		return fd;
+	n = read(fd, rootfsdev, sizeof(rootfsdev)-1);
+	close(fd);
+	if (n < 0)
+		return n;
+	while (n > 0 && !isgraph(rootfsdev[n-1]))
+		n -= 1;
+	rootfsdev[n] = '\0';
+
+	n = snprintf(buf, bufsiz-1, "%s-%s-%s", boardspec, machinename, rootfsdev);
+	if (n >= 0)
+		buf[n] = '\0';
+
+	return n;
+
+} /* construct_tnspec */
+
+/*
  * free_context
  */
 static void
@@ -236,7 +291,7 @@ bup_init (const char *pathname)
 	struct stat st;
 	off_t payload_size;
 	uint8_t *bufp;
-	int i, len;
+	int i;
 
 	ctx = malloc(sizeof(*ctx));
 	if (ctx == NULL)
@@ -248,12 +303,10 @@ bup_init (const char *pathname)
 		free(ctx);
 		return NULL;
 	}
-	len = tegra_boardspec(ctx->our_spec_str, sizeof(ctx->our_spec_str)-1);
-	if (len < 0) {
-		free_context(ctx);
+	if (construct_tnspec(ctx->our_spec_str, sizeof(ctx->our_spec_str)) < 0) {
+		free(ctx);
 		return NULL;
 	}
-	ctx->our_spec_str[len] = '\0';
 	spec_split(ctx->our_spec_str, &ctx->our_tnspec);
 
 	if (pathname == NULL)

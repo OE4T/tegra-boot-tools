@@ -26,6 +26,7 @@ do_subst = sed -e's,[@]bindir[@],$(bindir),g' \
 lib_LTLIBRARIES = libtegra-boot-tools.la
 libtegra_boot_tools_la_SOURCES = smd.c smd.h gpt.c gpt.h bup.c bup.h
 libtegra_boot_tools_la_CFLAGS = $(ZLIB_CFLAGS) $(TEGRA_EEPROM_CFLAGS)
+libtegra_boot_tools_la_CPPFLAGS = -DCONFIGPATH="$(tbtdir)"
 libtegra_boot_tools_la_LIBADD = $(ZLIB_LIBS) $(TEGRA_EEPROM_LIBS)
 libtegra_boot_tools_la_LDFLAGS = $(ZLIB_LDFLAGS) $(TEGRA_EEPROM_LDFLAGS)
 tbtinc_HEADERS = smd.h gpt.h bup.h
@@ -111,7 +112,7 @@ config-files/bootcountcheck.service: config-files/bootcountcheck.service.in Make
 	$(do_subst) < $(srcdir)/config-files/bootcountcheck.service.in > config-files/bootcountcheck.service
 
 tmpfiles_DATA = config-files/tegra-bootinfo.conf
-tbt_DATA = config-files/machine-name.conf
+tbt_DATA = config-files/machine-name.conf config-files/rootfsdev.conf
 
 dist_sbin_SCRIPTS = scripts/bootcountcheck
 

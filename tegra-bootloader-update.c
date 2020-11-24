@@ -14,8 +14,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <limits.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <fcntl.h>
 #include <tegra-eeprom/cvm.h>
 #include "bup.h"
@@ -519,11 +517,11 @@ main (int argc, char * const argv[])
 		fprintf(stderr, "Error checking BUP payload for missing entries\n");
 		goto reset_and_depart;
 	} else if (missing_count > 0) {
-		int i;
+		int m;
 		fprintf(stderr, "Error: missing entries for partition%s: %s",
 			(missing_count == 1 ? "" : "s"), missing[0]);
-		for (i = 1; i < missing_count; i++)
-			fprintf(stderr, ", %s", missing[i]);
+		for (m = 1; m < missing_count; m++)
+			fprintf(stderr, ", %s", missing[m]);
 		fprintf(stderr, "\n       for TNSPEC %s\n", bup_tnspec(bupctx));
 		goto reset_and_depart;
 	}

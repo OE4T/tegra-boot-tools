@@ -9,15 +9,10 @@
  */
 
 #include <stdio.h>
-#include <stdint.h>
-#include <stdlib.h>
 #include <stdbool.h>
 #include <getopt.h>
 #include <string.h>
 #include <unistd.h>
-#include <limits.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <fcntl.h>
 #include <tegra-eeprom/cvm.h>
 #include "gpt.h"

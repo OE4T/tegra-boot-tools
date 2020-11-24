@@ -11,7 +11,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#include <sys/types.h>
 #include <fcntl.h>
 #include <zlib.h>
 #include "smd.h"
@@ -99,7 +98,7 @@ smd_init (gpt_context_t *boot_gpt, int bootfd)
 	if (i > 2) {
 		free(ctx);
 		errno = ENODEV;
-		ctx = NULL;
+		return NULL;
 	}
 
 	for (i = 0; i < 2; i++) {
@@ -429,7 +428,7 @@ smd_update (smd_context_t *ctx, gpt_context_t *boot_gpt, int bootfd, bool force)
 
 	if (!(force || ctx->needs_update))
 		return 0;
-	if (ctx->smd_ods.version != 3 || memcmp(ctx->smd_ods.magic, smd_magic, sizeof(ctx->smd_ods.magic) != 0)) {
+	if (ctx->smd_ods.version != 3 || memcmp(ctx->smd_ods.magic, smd_magic, sizeof(ctx->smd_ods.magic)) != 0) {
 		errno = EINVAL;
 		return -1;
 	}

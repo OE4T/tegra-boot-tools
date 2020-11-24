@@ -11,11 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <errno.h>
-#include <limits.h>
 #include <ctype.h>
 #include <tegra-eeprom/boardspec.h>
 #include "bup.h"

@@ -56,16 +56,12 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <endian.h>
 #include <getopt.h>
-#include <inttypes.h>
 #include <ctype.h>
 #include <sys/stat.h>
-#include <sys/types.h>
 #include <sys/file.h>
 #include <zlib.h>
 #include <tegra-eeprom/cvm.h>
-#include "bup.h"
 #include "smd.h"
 #include "config.h"
 

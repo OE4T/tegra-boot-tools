@@ -1,0 +1,59 @@
+#!/bin/sh
+usage() {
+    cat >&2 <<EOF
+NV emulation wrapper for tegra-bootloader-update
+
+Usage:
+	nv_update_engine
+
+Options:
+-i, --install          install update (add 'no-reboot' to prevent reboot)
+-v, --verify           NOT IMPLEMENTED
+-d, --disable-ab       disable redundancy
+-e, --enable-ab        enable redundancy
+-h, --help             display this help
+EOF
+}
+
+ARGS=$(getopt -n $(basename "$0") -l "install,verify,disable-ab,enable-ab,help" -o "i::vdeh" -- "$@")
+if [ $? -ne 0 ]; then
+    usage
+    exit 1
+fi
+eval set -- "$ARGS"
+unset ARGS
+# After getopt parsing:
+# $1 must be one of the options
+# $2 must be -- (i.e., no more options)
+if [ "$2" != "--" ]; then
+    usage
+    exit 1
+fi
+
+case "$1" in
+    --install|-i)
+	if [ -n "$3" -a "$3" != "no-reboot" ]; then
+	    usage
+	    exit 1
+	fi
+	tegra-bootloader-update /opt/ota_package/bl_update_payload
+	[ "$3" = "no-reboot" ] || reboot
+	;;
+    --disable-ab|-d)
+	tegra-boot-control --disable
+	;;
+    --enable-ab|-e)
+	tegra-boot-control --enable
+	;;
+    --verify|-v)
+	echo "Note: verify not implemented" >&2
+	;;
+    --help|-h)
+	usage
+	;;
+    *)
+	echo "Error processing options" >&2
+	usage
+	exit 1
+	;;
+esac

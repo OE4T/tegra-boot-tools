@@ -114,6 +114,6 @@ config-files/bootcountcheck.service: config-files/bootcountcheck.service.in Make
 tmpfiles_DATA = config-files/tegra-bootinfo.conf
 tbt_DATA = config-files/machine-name.conf config-files/rootfsdev.conf
 
-dist_sbin_SCRIPTS = scripts/bootcountcheck
+dist_sbin_SCRIPTS = scripts/bootcountcheck scripts/nvbootctrl scripts/nv_update_engine
 
 CLEANFILES = $(systemdsystemunit_DATA)

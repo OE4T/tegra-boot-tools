@@ -1,0 +1,66 @@
+#!/bin/sh
+usage() {
+cat >&2 <<EOF
+nvbootctrl - NV compatibility interface to tegra-boot-control
+
+Commands:
+  nvbootctrl get-number-slots
+  nvbootctrl get-current-slot
+  nvbootctrl mark-boot-successful
+  nvbootctrl set-active-boot-slot SLOT
+  nvbootctrl set-slot-as-unbootable SLOT     -- NOT IMPLEMENTED
+  nvbootctrl is-slot-bootable SLOT           -- NOT IMPLEMENTED
+  nvbootctrl is-slot-marked-successful SLOT  -- NOT IMPLEMENTED
+  nvbootctrl get-suffix SLOT
+  nvbootctrl dump-slots-info
+EOF
+}
+
+cmd="$1"
+slot="$2"
+
+if [ -z "$cmd" ]; then
+    usage
+    exit 1
+fi
+
+case $cmd in
+    get-number-slots)
+	if tegra-boot-control --status | grep -q '^Redundancy: disabled'; then
+	    echo 1
+	else
+	    echo 2
+	fi
+	;;
+    get-current-slot)
+	tegra-boot-control --current-slot
+	;;
+    mark-boot-successful)
+	tegra-boot-control --mark-successful
+	;;
+    set-active-boot-slot)
+	if [ -n "$slot" ]; then
+	    tegra-boot-control --set-active $slot
+	else
+	    usage
+	    exit 1
+	fi
+	;;
+    get-suffix)
+	if [ "$slot" = "0" ]; then
+	    echo ""
+	elif [ "$slot" = "1" ]; then
+	    echo "_b"
+	else
+	    usage
+	    exit 1
+	fi
+	;;
+    dump-slots-info)
+	tegra-boot-control --status
+	;;
+    *)
+	usage
+	exit 1
+	;;
+esac

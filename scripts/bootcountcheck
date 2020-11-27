@@ -1,4 +1,5 @@
 #!/bin/sh
+tegra-bootinfo --initialize
 tegra-bootinfo --check-status
 if [ $? = 77 ]; then
     curslot=$(tegra-boot-control --current-slot)

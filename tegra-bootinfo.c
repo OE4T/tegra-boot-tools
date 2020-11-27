@@ -930,11 +930,12 @@ show_bootinfo(void) {
 	printf("devinfo version:        %u\n"
 	       "Boot in progress:       %s\n"
 	       "Failed boots:           %d\n"
-	       "Extension space:        %d sectors\n",
+	       "Extension space:        %d sector%s\n",
 	       ctx->curinfo.devinfo_version,
 	       (ctx->curinfo.flags & FLAG_BOOT_IN_PROGRESS) ? "YES" : "NO",
 	       ctx->curinfo.failed_boots,
-	       ctx->curinfo.ext_sectors);
+	       ctx->curinfo.ext_sectors,
+	       (ctx->curinfo.ext_sectors == 1 ? "" : "s"));
 	close_bootinfo(ctx, 0);
 	return 0;
 

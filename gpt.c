@@ -16,6 +16,11 @@
 #include <zlib.h>
 #include <fcntl.h>
 #include "gpt.h"
+#include "config.h"
+#define QUOTE(m_) #m_
+#define XQUOTE(m_) QUOTE(m_)
+static const char bootpartconf[] = XQUOTE(CONFIGPATH) "/boot-partitions.conf";
+#define MAX_CONFIG_ENTRIES 64U
 
 struct gpt_header_s {
 	unsigned char signature[8];
@@ -255,3 +260,60 @@ gpt_enumerate_partitions (gpt_context_t *ctx, void **iterctx)
 	return &ctx->entries[idx];
 
 } /* gpt_enumerate_partitions */
+
+int
+gpt_fd (gpt_context_t *ctx)
+{
+	return ctx->fd;
+} /* gpt_fd */
+
+int
+gpt_load_from_config (gpt_context_t *ctx)
+{
+	FILE *fp;
+	struct gpt_entry_s *destent;
+	char linebuf[256], *cp, *anchor;
+	unsigned long val;
+	unsigned int i;
+
+	fp = fopen(bootpartconf, "r");
+	if (fp == NULL)
+		return -1;
+	ctx->entries = calloc(MAX_CONFIG_ENTRIES, sizeof(struct gpt_entry_s));
+	if (ctx->entries == NULL) {
+		fclose(fp);
+		return -1;
+	}
+	for (i = 0; i < MAX_CONFIG_ENTRIES && fgets(linebuf, sizeof(linebuf), fp) != NULL; i++) {
+		destent = &ctx->entries[i];
+		anchor = linebuf;
+		cp = strchr(anchor, ':');
+		if (cp == NULL || cp - anchor >= sizeof(destent->part_name))
+			goto parse_error;
+		memcpy(destent->part_name, anchor, cp-anchor);
+		anchor = cp + 1;
+		cp = strchr(anchor, ':');
+		if (cp == NULL)
+			goto parse_error;
+		*cp = '\0';
+		val = strtoul(anchor, NULL, 10);
+		if (val == ULONG_MAX || val % ctx->blocksize != 0)
+			goto parse_error;
+		destent->first_lba = val / ctx->blocksize;
+		anchor = cp + 1;
+		val = strtoul(anchor, NULL, 10);
+		if (val == ULONG_MAX || val == 0 || val % ctx->blocksize != 0)
+			goto parse_error;
+		destent->last_lba = destent->first_lba + (val / ctx->blocksize) - 1U;
+	}
+	ctx->entry_count = i;
+	fclose(fp);
+	return 0;
+parse_error:
+	free(ctx->entries);
+	ctx->entries = NULL;
+	fclose(fp);
+	errno = EINVAL;
+	return -1;
+
+} /* gpt_load_from_config */

@@ -33,7 +33,7 @@ tbtinc_HEADERS = smd.h gpt.h bup.h
 pkgconfig_DATA = tegra-boot-tools.pc
 
 bin_PROGRAMS = tegra-bootloader-update tegra-boot-control tegra-bootinfo
-tegra_bootloader_update_SOURCES = tegra-bootloader-update.c bct_t18x.c bct_t19x.c bct.h \
+tegra_bootloader_update_SOURCES = tegra-bootloader-update.c bct_t18x.c bct_t19x.c bct_t21x.c bct.h \
     nvidia/nvcommon.h \
     nvidia/t18x/arse0.h \
     nvidia/t18x/nvboot_crypto_signatures.h \

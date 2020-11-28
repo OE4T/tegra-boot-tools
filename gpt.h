@@ -19,11 +19,13 @@ typedef struct gpt_entry_s gpt_entry_t;
 
 gpt_context_t *gpt_init(const char *devname, unsigned int blocksize);
 void gpt_finish(gpt_context_t *ctx);
+int gpt_fd(gpt_context_t *ctx);
 
 #define GPT_LOAD_BACKUP_ONLY	(1<<0)
 #define GPT_NVIDIA_SPECIAL	(1<<1)
 
 int gpt_load(gpt_context_t *ctx, unsigned int flags);
+int gpt_load_from_config(gpt_context_t *ctx);
 
 gpt_entry_t *gpt_find_by_name(gpt_context_t *ctx, const char *name);
 gpt_entry_t *gpt_enumerate_partitions(gpt_context_t *ctx, void **iterctx);

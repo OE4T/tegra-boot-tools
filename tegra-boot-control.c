@@ -167,7 +167,7 @@ main (int argc, char * const argv[])
 	int c, which, fd;
 	int reset_bootdev;
 	int curslot;
-	unsigned int selected_slot;
+	unsigned int selected_slot = 0;
 	int result = 1;
 	tegra_soctype_t soctype;
 	gpt_context_t *gptctx;

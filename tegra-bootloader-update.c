@@ -68,7 +68,8 @@ static struct update_entry_s nonredundant_entries[MAX_ENTRIES];
 static unsigned int redundant_entry_count;
 static unsigned int nonredundant_entry_count;
 static size_t contentbuf_size;
-static uint8_t *contentbuf, *slotbuf;
+static size_t slotbuf_size;
+static uint8_t *contentbuf, *slotbuf, *zerobuf;
 static int bct_updated;
 static tegra_soctype_t soctype = TEGRA_SOCTYPE_INVALID;
 static bool spiboot_platform;
@@ -230,11 +231,21 @@ read_completely_at (int fd, void *buf, size_t bufsiz, off_t offset)
  *
  */
 static ssize_t
-write_completely_at (int fd, void *buf, size_t bufsiz, off_t offset)
+write_completely_at (int fd, void *buf, size_t bufsiz, off_t offset, size_t erase_size)
 {
 	ssize_t n, remain, total;
 	if (lseek(fd, offset, SEEK_SET) == (off_t) -1)
 		return -1;
+	if (erase_size != 0) {
+		for (remain = erase_size, total = 0; remain > 0; total += n, remain -= n) {
+			n = write(fd, (uint8_t *) zerobuf + total, remain);
+			if (n <= 0)
+				return -1;
+		}
+		fsync(fd);
+		if (lseek(fd, offset, SEEK_SET) == (off_t) -1)
+			return -1;
+	}
 	for (remain = bufsiz, total = 0; remain > 0; total += n, remain -= n) {
 		n = write(fd, (uint8_t *) buf + total, remain);
 		if (n <= 0)
@@ -286,17 +297,19 @@ static const char *redundant_part_format(const char *partname)
  * then block 0/slot 0.
  *
  * bootfd: file descriptor for boot device
- * curbct: pointer to buffer holding current BCT, previously read
+ * curbct: pointer to buffer holding current BCT partition, previously read
+ * newbct: pointer to new BCT to write (maybe)
  * ent:    pointer to entry from the update payload
  *
  * returns: 0 on success, -1 on error (errno not set)
  *
  */
 static int
-update_bct (int bootfd, void *curbct, struct update_entry_s *ent)
+update_bct (int bootfd, void *curbct, void *newbct, struct update_entry_s *ent)
 {
 	unsigned int block_size = 16384;
 	unsigned int page_size = 512;
+	size_t bctslotsize;
 	int i;
 
 	if (soctype == TEGRA_SOCTYPE_210) {
@@ -304,18 +317,20 @@ update_bct (int bootfd, void *curbct, struct update_entry_s *ent)
 		fprintf(stderr, "Internal error: incorrect BCT update function for t210\n");
 		return -1;
 	}
-	if ((soctype == TEGRA_SOCTYPE_186 && !bct_update_valid_t18x(slotbuf, curbct, &block_size, &page_size)) ||
-	    (soctype == TEGRA_SOCTYPE_194 && !bct_update_valid_t19x(slotbuf, curbct, &block_size, &page_size))) {
+	if ((soctype == TEGRA_SOCTYPE_186 && !bct_update_valid_t18x(curbct, newbct, &block_size, &page_size)) ||
+	    (soctype == TEGRA_SOCTYPE_194 && !bct_update_valid_t19x(curbct, newbct, &block_size, &page_size))) {
 		printf("[FAIL]\n");
 		fprintf(stderr, "Error: validation check failed for BCT update\n");
 		return -1;
 	}
 
+	bctslotsize = page_size * ((ent->length + (page_size-1)) / page_size);
+
 	for (i = 0; i < 3; i++) {
 		off_t offset;
 		switch (i) {
 			case 0:
-				offset = page_size * ((ent->length + (page_size-1)) / page_size);
+				offset = bctslotsize;
 				break;
 			case 1:
 				offset = block_size;
@@ -324,11 +339,11 @@ update_bct (int bootfd, void *curbct, struct update_entry_s *ent)
 				offset = 0;
 				break;
 		}
-		if (memcmp(contentbuf, slotbuf + offset, ent->length) == 0)
+		if (memcmp(newbct, (uint8_t *)curbct + offset, ent->length) == 0)
 			printf("[offset=%lu,no update needed]...", (unsigned long) offset);
 		else {
 			printf("[offset=%lu]...", (unsigned long) offset);
-			if (write_completely_at(bootfd, contentbuf, ent->length, ent->part->first_lba * 512 + offset) < 0)  {
+			if (write_completely_at(bootfd, newbct, ent->length, ent->part->first_lba * 512 + offset, bctslotsize) < 0) {
 				printf("[FAIL]\n");
 				perror("BCT");
 				return -1;
@@ -370,14 +385,15 @@ update_bct (int bootfd, void *curbct, struct update_entry_s *ent)
  * in the L4T BSP.
  *
  * bootfd: file descriptor for boot device
- * curbct: pointer to buffer holding current BCT, previously read
+ * curbct: pointer to buffer holding current BCT partition, previously read
+ * newbct: pointer to new BCT to write (maybe)
  * ent:    pointer to entry from the update payload
  * which:  pointer to BCT update context, see above
  *
  * returns: 0 on success, -1 on error (errno not set)
  */
 static int
-update_bct_t210 (int bootfd, void *curbct, struct update_entry_s *ent, int *which)
+update_bct_t210 (int bootfd, void *curbct, void *newbct, struct update_entry_s *ent, int *which)
 {
 	unsigned int block_size = 16384;
 	unsigned int page_size = 512;
@@ -385,6 +401,8 @@ update_bct_t210 (int bootfd, void *curbct, struct update_entry_s *ent, int *whic
 	unsigned int bctpartsize;
 	int bctcount, bctstart, bctend, bctidx;
 	char bctname[32];
+	static const char indent[] = "                    "; // length of 'Processing BCT... leader
+	const char *prefix;
 
 	if (soctype != TEGRA_SOCTYPE_210) {
 		printf("[INTERNAL ERROR]\n");
@@ -396,7 +414,7 @@ update_bct_t210 (int bootfd, void *curbct, struct update_entry_s *ent, int *whic
 		fprintf(stderr, "Internal error: no BCT selection context for t210 update\n");
 		return -1;
 	}
-	if (!bct_update_valid_t21x(slotbuf, curbct, &block_size, &page_size)) {
+	if (!bct_update_valid_t21x(curbct, newbct, &block_size, &page_size)) {
 		printf("[FAIL]\n");
 		fprintf(stderr, "Error: validation check failed for BCT update\n");
 		return -1;
@@ -431,38 +449,39 @@ update_bct_t210 (int bootfd, void *curbct, struct update_entry_s *ent, int *whic
 		/* Write first BCT next */
 		*which = 0;
 	}
-	for (bctidx = bctstart; bctidx >= bctend; bctidx -= 1) {
+	prefix = "";
+	for (bctidx = bctstart; bctidx >= bctend; bctidx -= 1, prefix = indent) {
 		off_t offset = bctidx * block_size;
 		if (bctidx == 0)
 			strcpy(bctname, "BCT");
 		else
 			sprintf(bctname, "BCT-%u", bctidx);
 
-		if (memcmp(contentbuf, slotbuf + offset, ent->length) == 0) {
-			printf("[%s@%lu,no update needed]...", bctname, (unsigned long) offset);
-			fflush(stdout);
+		if (memcmp(newbct, (uint8_t *)curbct + offset, ent->length) == 0) {
+			printf("%s%s: [no update needed]\n", prefix, bctname);
 			continue;
 		}
 
-		printf("[%s@%lu]...", bctname, (unsigned long) offset);
+		printf("%s%s: ", prefix, bctname);
 		fflush(stdout);
-		if (write_completely_at(bootfd, contentbuf, ent->length, ent->part->first_lba * 512 + offset) < 0) {
+		if (write_completely_at(bootfd, contentbuf, ent->length, ent->part->first_lba * 512 + offset, ent->length) < 0) {
+
 			printf("[FAIL]\n");
 			perror("BCT");
 			return -1;
 		}
 		if (bctidx == 0 && bctcopies == 2) {
 			offset += ent->length;
-			if (write_completely_at(bootfd, contentbuf, ent->length, ent->part->first_lba * 512 + offset) < 0) {
+			if (write_completely_at(bootfd, contentbuf, ent->length, ent->part->first_lba * 512 + offset, ent->length) < 0) {
 				printf("[FAIL]\n");
 				perror("BCT");
 				return -1;
 			}
 		}
+		printf("[OK]\n");
 	}
 	fsync(bootfd);
 	bct_updated = 1;
-	printf("[OK]\n");
 	return 0;
 
 } /* update_bct_t210 */
@@ -490,9 +509,10 @@ static int
 maybe_update_bootpart (int bootfd, int gptfd, struct update_entry_s *ent, int is_bct, int *bctctx)
 {
 	int fd;
+	size_t partsize = (ent->part->last_lba - ent->part->first_lba + 1) * 512;
 	off_t offset;
 
-	if (ent->length > (ent->part->last_lba - ent->part->first_lba + 1) * 512) {
+	if (ent->length > partsize) {
 		printf("[FAIL]\n");
 		fprintf(stderr, "Error: BUP contents too large for boot partition\n");
 		return -1;
@@ -508,22 +528,22 @@ maybe_update_bootpart (int bootfd, int gptfd, struct update_entry_s *ent, int is
 		fd = gptfd;
 		offset -= bootdev_size;
 	}
-	if (read_completely_at(fd, slotbuf, ent->length, offset) < 0) {
+	if (read_completely_at(fd, slotbuf, partsize, offset) < 0) {
 		printf("[FAIL]\n");
 		perror(ent->partname);
 		return -1;
 	}
 	if (is_bct)
 		return (soctype == TEGRA_SOCTYPE_210
-			? update_bct_t210(bootfd, contentbuf, ent, bctctx)
-			: update_bct(bootfd, contentbuf, ent));
+			? update_bct_t210(bootfd, slotbuf, contentbuf, ent, bctctx)
+			: update_bct(bootfd, slotbuf, contentbuf, ent));
 
 	if (memcmp(contentbuf, slotbuf, ent->length) == 0) {
 		printf("[no update needed]\n");
 		return 0;
 	}
 
-	if (write_completely_at(fd, contentbuf, ent->length, offset) < 0) {
+	if (write_completely_at(fd, contentbuf, ent->length, offset, partsize) < 0) {
 		printf("[FAIL]\n");
 		perror(ent->partname);
 		return -1;
@@ -554,6 +574,7 @@ static int
 process_entry (bup_context_t *bupctx, int bootfd, int gptfd, struct update_entry_s *ent, int dryrun, int *bctctx)
 {
 	ssize_t total, n;
+	unsigned int erase_size;
 	int fd;
 
 	printf("  Processing %s... ", ent->partname);
@@ -595,7 +616,8 @@ process_entry (bup_context_t *bupctx, int bootfd, int gptfd, struct update_entry
 		close(fd);
 		return 0;
 	}
-	if (write_completely_at(fd, contentbuf, ent->length, 0) < 0) {
+	erase_size = 512 * ((ent->length + 511) / 512);
+	if (write_completely_at(fd, contentbuf, ent->length, 0, erase_size) < 0) {
 		printf("[FAIL]\n");
 		perror(ent->devname);
 		close(fd);
@@ -690,7 +712,7 @@ find_entry_by_name (struct update_entry_s *list, unsigned int count, const char 
  * performing partition updates in the correct order
  * on tegra210 systems.
  *
- * Note that on tegra210s (unliked tegra186/tegra194), the
+ * Note that on tegra210s (unlike tegra186/tegra194), the
  * ordered list will be longer than the original list, since
  * BCT updates are handled in multiple parts (last, middle, first),
  * with each update pointing back to the same original entry.
@@ -737,6 +759,68 @@ order_entries_t210 (struct update_entry_s *orig, struct update_entry_s **ordered
 	return retcount;
 
 } /* order_entries_t210 */
+
+/*
+ * find_largest_partition
+ *
+ * Locates the largest partition to be updated, for
+ * allocating the buffers used for holding and
+ * erasing partition contents.
+ *
+ * sizep: pointer to size_t to hold result
+ *
+ * Returns: 0 on success, -1 on error
+ */
+static int
+find_largest_partition (size_t *sizep)
+{
+	int i;
+	size_t largest = 0;
+	size_t partlen;
+
+	for (i = 0; i < redundant_entry_count; i++) {
+		struct update_entry_s *ent = &redundant_entries[i];
+		if (ent->part != NULL)
+			partlen = (ent->part->last_lba - ent->part->first_lba + 1) * 512;
+		else {
+			off_t offset;
+			int fd = open(ent->devname, O_RDONLY);
+			if (fd < 0)
+				goto error_depart;
+			offset = lseek(fd, 0, SEEK_END);
+			close(fd);
+			if (offset == (off_t) -1)
+				goto error_depart;
+			partlen = (size_t) offset;
+		}
+		if (partlen > largest)
+			largest = partlen;
+	}
+	for (i = 0; i < nonredundant_entry_count; i++) {
+		struct update_entry_s *ent = &nonredundant_entries[i];
+		if (ent->part != NULL)
+			partlen = (ent->part->last_lba - ent->part->first_lba + 1) * 512;
+		else {
+			off_t offset;
+			int fd = open(ent->devname, O_RDONLY);
+			if (fd < 0)
+				goto error_depart;
+			offset = lseek(fd, 0, SEEK_END);
+			close(fd);
+			if (offset == (off_t) -1)
+				goto error_depart;
+			partlen = (size_t) offset;
+		}
+		if (partlen > largest)
+			largest = partlen;
+	}
+	*sizep = 512 * ((largest + 511) / 512);
+	return 0;
+error_depart:
+	return -1;
+
+} /* find_largest_partition */
+
 
 /*
  * main program
@@ -843,13 +927,16 @@ main (int argc, char * const argv[])
 			else
 				suffix = "";
 		}
-	} else {
+	} else if (soctype == TEGRA_SOCTYPE_210) {
 		if (slot_specified) {
 			fprintf(stderr, "Error: unsupported operation for t210 platform\n");
 			return 1;
 		}
 		// on t210, the operation is always 'initialize'
 		initialize = 1;
+	} else {
+		fprintf(stderr, "Error: unrecognized SoC type\n");
+		return 1;
 	}
 
 	bupctx = bup_init(argv[optind]);
@@ -1093,8 +1180,13 @@ main (int argc, char * const argv[])
 	}
 
 	contentbuf = malloc(largest_length);
-	slotbuf = malloc(largest_length);
-	if (contentbuf == NULL || slotbuf == NULL) {
+	if (find_largest_partition(&slotbuf_size) < 0) {
+		fprintf(stderr, "Error obtaining partition sizes\n");
+		goto reset_and_depart;
+	}
+	slotbuf = malloc(slotbuf_size);
+	zerobuf = calloc(1, slotbuf_size);
+	if (contentbuf == NULL || slotbuf == NULL || zerobuf == NULL) {
 		perror("allocating content buffers");
 		goto reset_and_depart;
 	}
@@ -1130,18 +1222,19 @@ main (int argc, char * const argv[])
 			if (process_entry(bupctx, fd, gptfd, &mb1_other, dryrun, NULL) != 0)
 				goto reset_and_depart;
 		}
-		if (dryrun) {
-			if (!slot_specified)
+		if (!slot_specified) {
+			if (dryrun)
 				printf("[skip] mark slot %d as active\n", (initialize ? 0 : 1 - curslot));
-		} else if (!slot_specified) {
-			unsigned int newslot = (initialize ? 0 : 1 - curslot);
-			if (smd_slot_mark_active(smdctx, newslot) < 0) {
-				perror("marking new boot slot active");
-				goto reset_and_depart;
+			else  {
+				unsigned int newslot = (initialize ? 0 : 1 - curslot);
+				if (smd_slot_mark_active(smdctx, newslot) < 0) {
+					perror("marking new boot slot active");
+					goto reset_and_depart;
+				}
+				printf("Slot %u marked as active for next boot\n", newslot);
+				if (smd_update(smdctx, gptctx, fd, initialize) < 0)
+					perror("updating slot metadata");
 			}
-			printf("Slot %u marked as active for next boot\n", newslot);
-			if (smd_update(smdctx, gptctx, fd, initialize) < 0)
-				perror("updating slot metadata");
 		}
 	}
 
@@ -1170,6 +1263,8 @@ main (int argc, char * const argv[])
 		free(slotbuf);
 	if (contentbuf)
 		free(contentbuf);
+	if (zerobuf)
+		free(zerobuf);
 
 	gpt_finish(gptctx);
 	bup_finish(bupctx);

@@ -49,8 +49,8 @@ AC_ARG_WITH([gptdev],
     [], [with_gptdev=/dev/mmcblk0boot1])
 AC_DEFINE_UNQUOTED([OTAGPTDEV], ["$with_gptdev"], [Device where pseudo-GPT for boot partitions is stored])
 AC_ARG_WITH([extended-sector-count],
-    AS_HELP_STRING([--with-extended-sector-count=N], [number of 512-byte sectors for boot variable storage]),
-    [], [with_extended_sector_count=1])
+    AS_HELP_STRING([--with-extended-sector-count=N], [number of extra 512-byte sectors for boot variable storage]),
+    [], [with_extended_sector_count=15])
 AC_DEFINE_UNQUOTED([EXTENSION_SECTOR_COUNT], [$with_extended_sector_count], [Number of extension sectors])
 
 PKG_PROG_PKG_CONFIG([0.29])

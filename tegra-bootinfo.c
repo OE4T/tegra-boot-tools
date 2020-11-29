@@ -129,16 +129,21 @@ struct devinfo_context {
 };
 
 /*
- * We stash the info at the end of mmcblk0boot1, just
+ * We stash the info at the end of mmcblk0boot1.
+ * On tegra186/194 platforms, it goes just
  * in front of the pseudo-GPT that NVIDIA puts at the
- * very end. Two copies, one 512 byte sector each for
- * the base, plus extended storage for variables of
- * one or more sectors, configurable at build time.
+ * very end. On tegra210 platforms, it goes at the
+ * very end. Two copies are stored, with one 512 byte
+ * sector each for the base, plus extended storage
+ * for variables of one or more sectors (configurable
+ * at build time). On tegra186/194 platforms, the two
+ * copies are located together, while on tegra210 platforms,
+ * the second copy is located between VER_b and VER.
  *
  * We look for these using SEEK_END, so the offsets
  * must be negative. The pseudo-GPT occupies the
- * last 34 sectors of the partition, we leave two
- * additional sectors as buffer.
+ * last 34 sectors of the partition, and we leave two
+ * additional sectors as buffer (on t186/t194).
  *
  * Note that 4 bytes are reserved at the end of
  * each of the extended storage blocks for a CRC
@@ -147,8 +152,8 @@ struct devinfo_context {
  * block for compatibility with older versions of
  * this tool that did not support the extensions.
  *
- * Example layout with 256KiB (1 base sector plus 511
- * extension sectors) per storage copy:
+ * Example layout on t186/t194 with 256KiB (1 base sector
+ * plus 511 extension sectors) per storage copy:
  *
  *  sector                                          offset (hex)
  *  7132         +---------------------------------+  37B800
@@ -163,16 +168,49 @@ struct devinfo_context {
  *  8159         +---------------------------------+
  *               |           pseudo-GPT            |
  *  8192         +---------------------------------+
+ *
+ * Example layout on t210 (eMMC) with 8Kib (1 base sector
+ * plus 15 extension sectors) per storage copy:
+ *
+ *  sector                                          offset (hex)
+ *  7936         +---------------------------------+  3E0000
+ *               |          VER_b                  |
+ *               +---------------------------------+
+ *  8047         +---------------------------------+  3EDE00
+ *               |       extended var store B      |
+ *               +---------------------------------+
+ *  8063         =       base devinfo copy B       =  3EFE00
+ *  8064         +---------------------------------+  3F0000
+ *               |          VER                    |
+ *               +---------------------------------+
+ *  8175         +---------------------------------+  3FDE00
+ *               |       extended var store A      |
+ *               +---------------------------------+
+ *  8191         =       base devinfo copy A       =  3FFE00
+ *
  */
-static const off_t devinfo_offset[2] = {
+static const off_t devinfo_offset_non_t21x[2] = {
 	[0] = -((36 + 1) * 512),
 	[1] = -((36 + 2) * 512),
 };
 
-static const off_t extension_offset[2] = {
+static const off_t extension_offset_non_t21x[2] = {
 	[0] = -((EXTENSION_SECTOR_COUNT + 36 + 2) * 512),
 	[1] = -((EXTENSION_SECTOR_COUNT * 2 + 36 + 2) * 512),
 };
+
+static const off_t devinfo_offset_t21x[2] = {
+	[0] = -512,
+	[1] = -(65536 + 512),
+};
+
+static const off_t extension_offset_t21x[2] = {
+	[0] = -((EXTENSION_SECTOR_COUNT + 2) * 512),
+	[1] = -(65536 + (EXTENSION_SECTOR_COUNT + 2) * 512),
+};
+
+static const off_t *devinfo_offset;
+static const off_t *extension_offset;
 
 static const char *devinfo_dev;
 static const char bootdev[] = OTABOOTDEV;
@@ -272,6 +310,42 @@ set_bootdev_writeable_status (const char *dev, int make_writeable)
 	return make_writeable != is_writeable;
 
 } /* set_bootdev_writeable_status */
+
+/*
+ * identify_chip
+ *
+ * Look up the tegra chip ID and adjust offsets based
+ * on whether it's a t210 or not.
+ *
+ * Returns: 0 on success, -1 on error (errno not set)
+ */
+static int
+identify_chip (void)
+{
+	char buf[32];
+	ssize_t n;
+	unsigned long chipid;
+	int fd = open("/sys/module/tegra_fuse/parameters/tegra_chip_id", O_RDONLY);
+
+	if (fd < 0)
+		return -1;
+	n = read(fd, buf, sizeof(buf));
+	close(fd);
+	if (n <= 0)
+		return -1;
+	chipid = strtoul(buf, NULL, 0);
+	if (chipid != 0x21 && chipid != 0x18 && chipid != 0x19)
+		return -1;
+	if (chipid == 0x21) {
+		devinfo_offset = devinfo_offset_t21x;
+		extension_offset = extension_offset_t21x;
+	} else {
+		devinfo_offset = devinfo_offset_non_t21x;
+		extension_offset = extension_offset_non_t21x;
+	}
+	return 0;
+
+} /* identify_chip */
 
 /*
  * find_storage_dev
@@ -1235,6 +1309,11 @@ main (int argc, char * const argv[])
 		} /* switch (c) */
 
 	} /* while getopt */
+
+	if (identify_chip() != 0) {
+		fprintf(stderr, "Error: cannot identify SoC type\n");
+		return 1;
+	}
 
 	if (find_storage_dev() != 0) {
 		fprintf(stderr, "Error: cannot locate storage device\n");

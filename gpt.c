@@ -2,8 +2,12 @@
  * gpt.c
  *
  * Functions for parsing a GUID partition table.
+ * Also includes functions for locating partitions
+ * based on name/offset/length entries in a configuration
+ * file, for handling tegra210 boot devices that
+ * do not include a GPT.
  *
- * Copyright (c) 2019, Matthew Madison
+ * Copyright (c) 2019-2020, Matthew Madison
  *
  */
 #define _DEFAULT_SOURCE
@@ -22,6 +26,9 @@
 static const char bootpartconf[] = XQUOTE(CONFIGPATH) "/boot-partitions.conf";
 #define MAX_CONFIG_ENTRIES 64U
 
+/*
+ * On-device structures for a GUID partition table.
+ */
 struct gpt_header_s {
 	unsigned char signature[8];
 	uint32_t revision;
@@ -48,6 +55,9 @@ struct gpt_entry_ondisk_s {
 	uint16_t part_name_utf16[36];
 } __attribute__((packed));
 
+/*
+ * Context structure for the API.
+ */
 struct gpt_context_s {
 	int fd;
 	unsigned int blocksize;
@@ -61,6 +71,65 @@ struct gpt_context_s {
 	struct gpt_entry_s *entries;
 };
 
+/*
+ * parse_header
+ *
+ * Parses a GPT header that was loaded into our
+ * context's storage buffer, extracting the fields
+ * into a gpt_header_s struct and putting them into
+ * host order.
+ *
+ * ctx: context pointer
+ * len: length of the data in ctx->buffer
+ * dest: pointer to gpt_header_s structure to populate
+ *
+ * Returns: 0 on success, -1 on error.
+ *          errno is not set.
+ */
+static int
+parse_header (gpt_context_t *ctx, size_t len, struct gpt_header_s *dest) {
+	struct gpt_header_s *hdr = ctx->buffer;
+	uint32_t hlen, crc;
+
+	if (memcmp(hdr->signature, "EFI PART", 8) != 0)
+		return -1;
+	hlen = le32toh(hdr->header_size);
+	if (hlen < sizeof(struct gpt_header_s) || hlen > len)
+		return -1;
+        crc = le32toh(hdr->header_crc32);
+	hdr->header_crc32 = 0;
+	if (crc32(0, ctx->buffer, hlen) != crc)
+		return -1;
+	if (dest != NULL) {
+		memcpy(dest->signature, hdr->signature, sizeof(dest->signature));
+		dest->revision = le32toh(hdr->revision);
+		dest->header_size = hlen;
+		dest->header_crc32 = crc;
+		dest->current_lba = le64toh(hdr->current_lba);
+		dest->backup_lba = le64toh(hdr->backup_lba);
+		dest->first_usable_lba = le64toh(hdr->first_usable_lba);
+		dest->last_usable_lba = le64toh(hdr->last_usable_lba);
+		memcpy(dest->disk_guid, hdr->disk_guid, sizeof(dest->disk_guid));
+		dest->entries_start_lba = le64toh(hdr->entries_start_lba);
+		dest->entry_count = le32toh(hdr->entry_count);
+		dest->entry_size = le32toh(hdr->entry_size);
+		dest->entries_crc32 = le32toh(hdr->entries_crc32);
+	}
+	return 0;
+
+} /* parse_header */
+
+/*
+ * gpt_init
+ *
+ * Allocates and initializes a context structure
+ * for the externally-facing API.
+ *
+ * devname: device name where the GPT is stored
+ * blocksize: block size of the device, in bytes
+ *
+ * Returns: context pointer
+ */
 gpt_context_t *
 gpt_init (const char *devname, unsigned int blocksize)
 {
@@ -101,9 +170,20 @@ gpt_init (const char *devname, unsigned int blocksize)
 
 } /* gpt_init */
 
+/*
+ * gpt_finish
+ *
+ * Cleans up an API context.
+ *
+ * ctx: context pointer
+ *
+ * Returns: nothing
+ */
 void
 gpt_finish (gpt_context_t *ctx)
 {
+	if (ctx == NULL)
+		return;
 	close(ctx->fd);
 	if (ctx->entries)
 		free(ctx->entries);
@@ -112,38 +192,32 @@ gpt_finish (gpt_context_t *ctx)
 
 } /* gpt_finish */
 
-static int
-parse_header (gpt_context_t *ctx, size_t len, struct gpt_header_s *dest) {
-	struct gpt_header_s *hdr = ctx->buffer;
-	uint32_t hlen, crc;
-	if (memcmp(hdr->signature, "EFI PART", 8) != 0)
-		return -1;
-	hlen = le32toh(hdr->header_size);
-	if (hlen < sizeof(struct gpt_header_s) || hlen > len)
-		return -1;
-        crc = le32toh(hdr->header_crc32);
-	hdr->header_crc32 = 0;
-	if (crc32(0, ctx->buffer, hlen) != crc)
-		return -1;
-	if (dest != NULL) {
-		memcpy(dest->signature, hdr->signature, sizeof(dest->signature));
-		dest->revision = le32toh(hdr->revision);
-		dest->header_size = hlen;
-		dest->header_crc32 = crc;
-		dest->current_lba = le64toh(hdr->current_lba);
-		dest->backup_lba = le64toh(hdr->backup_lba);
-		dest->first_usable_lba = le64toh(hdr->first_usable_lba);
-		dest->last_usable_lba = le64toh(hdr->last_usable_lba);
-		memcpy(dest->disk_guid, hdr->disk_guid, sizeof(dest->disk_guid));
-		dest->entries_start_lba = le64toh(hdr->entries_start_lba);
-		dest->entry_count = le32toh(hdr->entry_count);
-		dest->entry_size = le32toh(hdr->entry_size);
-		dest->entries_crc32 = le32toh(hdr->entries_crc32);
-	}
-	return 0;
-
-} /* parse_header */
-
+/*
+ * gpt_load
+ *
+ * Loads the partition table from the device that was
+ * specified in gpt_init().
+ *
+ * A device will have a primary GPT located at the
+ * second block, and a backup GPT located one block
+ * from the end of the device. By default, this function
+ * will load and validate both copies. If both copies
+ * are valid, they must match.
+ *
+ * The flags argument is used for handling the boot
+ * partition GPT used on some of the Tegra platforms,
+ * which place only one copy at the end of the storage,
+ * device (flag GPT_LOAD_BACKUP_ONLY). On platforms that
+ * boot from eMMC, the GPT entries treat the two eMMC boot
+ * partitions as a single device, so LBA offsets must be
+ * adjusted (flag GPT_NVIDIA_SPECIAL).
+ *
+ * ctx: context pointer
+ * flags: see above
+ *
+ * Returns: 0 on success, -1 on error.
+ *          errno is not set.
+ */
 int
 gpt_load (gpt_context_t *ctx, unsigned int flags)
 {
@@ -192,7 +266,7 @@ gpt_load (gpt_context_t *ctx, unsigned int flags)
 		return -1;
 	startpos = ctx->blocksize * hdr->entries_start_lba;
 	/*
-	 * In the NVIDIA-special pseudo-GPT in mmblk0boot1, it counts the LBAs in
+	 * In the NVIDIA-special pseudo-GPT in mmcblk0boot1, it counts the LBAs in
 	 * both boot blocks together as if they were a single device.
 	 */
 	if (ctx->is_mmcboot1 && (flags & GPT_NVIDIA_SPECIAL) != 0)
@@ -224,6 +298,19 @@ gpt_load (gpt_context_t *ctx, unsigned int flags)
 
 } /* gpt_load */
 
+/*
+ * gpt_find_by_name
+ *
+ * Returns a GPT entry for a named partition.
+ * Caller must first call gpt_load() to load the
+ * partition table.
+ *
+ * ctx: context pointer
+ * name: name of partition
+ *
+ * Returns: NULL if not found, otherwise
+ *          a pointer to the GPT entry.
+ */
 gpt_entry_t *
 gpt_find_by_name (gpt_context_t *ctx, const char *name)
 {
@@ -244,6 +331,21 @@ gpt_find_by_name (gpt_context_t *ctx, const char *name)
 
 } /* gpt_find_by_name */
 
+/*
+ * gpt_enumerate partitions
+ *
+ * Iterates through the loaded GPT entries.  Caller
+ * should initialize the void * pointer pointed to
+ * be iterctx with 0 before the first call, then leave
+ * iterctx untouched until this function returns
+ * NULL at the end of the list.
+ *
+ * ctx: context pointer
+ * iterctx: iteration context
+ *
+ * Returns: GPT entry pointer or NULL when
+ *          there are no more entries
+ */
 gpt_entry_t *
 gpt_enumerate_partitions (gpt_context_t *ctx, void **iterctx)
 {
@@ -261,12 +363,46 @@ gpt_enumerate_partitions (gpt_context_t *ctx, void **iterctx)
 
 } /* gpt_enumerate_partitions */
 
+/*
+ * gpt_fd
+ *
+ * Returns the file descriptor opened for the
+ * device in gpt_init(), so the caller can use
+ * it for other I/O operations.
+ *
+ * ctx: context pointer
+ *
+ * Returns: >= 0: file descriptor
+ *          -1 on error (errno not set)
+ */
 int
 gpt_fd (gpt_context_t *ctx)
 {
+	if (ctx == NULL)
+		return -1;
 	return ctx->fd;
+
 } /* gpt_fd */
 
+/*
+ * gpt_load_from_config
+ *
+ * Alternative to gpt_load() that parses a partition
+ * configuration file instead of an actual GPT, for use
+ * on tegra210 platforms that do not embed a GPT in their
+ * boot devices.
+ *
+ * The configuration file consists of lines of the form
+ *    <name>:<offset>:<length>
+ *
+ * where <name> is the name of the partition, <offset>
+ * is the starting location as a byte offset, and
+ * <length> is the length in bytes.
+ *
+ * ctx: context pointer
+ *
+ * Returns: 0 on success, -1 on error (errno not set)
+ */
 int
 gpt_load_from_config (gpt_context_t *ctx)
 {
@@ -275,6 +411,9 @@ gpt_load_from_config (gpt_context_t *ctx)
 	char linebuf[256], *cp, *anchor;
 	unsigned long val;
 	unsigned int i;
+
+	if (ctx == NULL)
+		return -1;
 
 	fp = fopen(bootpartconf, "r");
 	if (fp == NULL)

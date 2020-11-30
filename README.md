@@ -39,9 +39,10 @@ will work on those systems as well, however.
 ## tegra-bootloader-update
 This tool can be used to parse a bootloader update (BUP) payload generated
 by the Tegra flashing tools, as well as program the appropriate contents
-of a BUP payload into the boot partitions on a tegra186 (Jetson TX2) or
-tegra194 (Jetson Xavier) device. It can replace the `nv_update_engine`
-tool provided in the L4T BSP.
+of a BUP payload into the boot partitions. It can replace the
+`nv_update_engine` tool provided in the L4T BSP for tegra186/tegra194
+platforms, and the `l4t_payload_updater_t210` tool on tegra210
+platforms.
 
 ### Differences from `nv_update_engine`
 
@@ -61,9 +62,18 @@ tool provided in the L4T BSP.
 * This tool automatically enables A/B redundancy during an update if
   it has not yet been enabled.
 
+### Differences from `l4t_payload_updater_t210`
+
+* Written in C, rather than Python.
+* Boot partition information is read from a configuration file at
+  runtime, rather than being hard-coded into the tool.
+* Automatically handles either SPI flash or eMMC boot partitions,
+  without depending on the MACHINE name as the Python tool does.
+
 ## tegra-boot-control
 This tool replaces the `nvbootctrl` program provided with the L4T BSP,
-and can be used to display or modify the boot slots.
+and can be used to display or modify the boot slots on a tegra186
+or tegra194-based platform.
 
 ### Differences from `nvbootctrl`
 
@@ -85,6 +95,11 @@ files needed to configure and build.
 ## Dependencies
 This package depends on systemd, libz, and
 [tegra-eeprom-tool](https://github.com/OE4T/tegra-eeprom-tool).
+
+For tegra210-based platforms, a configuration file enumerating the
+boot partitions, with offsets and sizes, is expected at runtime.
+This file should be generated from the flash layout XML file for
+the target.
 
 # License
 Distributed under license. See the [LICENSE](LICENSE) file for details.

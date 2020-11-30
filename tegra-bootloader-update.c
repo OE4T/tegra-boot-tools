@@ -287,8 +287,10 @@ static const char *redundant_part_format(const char *partname)
  *
  * For tegra186/tegra194 platforms only.
  *
- * A BCT slot is 0xE00 = 3584 bytes.
- * A block is 16KiB and holds multiple slots.
+ * A block is 16KiB or 32KiB and holds multiple slots;
+ * each slot is an even number of "pages" in size, where
+ * the page size is 512 bytes for eMMC devices and 2KiB for
+ * SPI flash.
  * The Tegra bootrom can handle up to 63 blocks, but
  * in practice, only block 0 slots 0 & 1, and block 1 slot 0
  * are used.
@@ -307,8 +309,8 @@ static const char *redundant_part_format(const char *partname)
 static int
 update_bct (int bootfd, void *curbct, void *newbct, struct update_entry_s *ent)
 {
-	unsigned int block_size = 16384;
-	unsigned int page_size = 512;
+	unsigned int block_size = (spiboot_platform ? 32768 : 16384);
+	unsigned int page_size = (spiboot_platform ? 2048 : 512);
 	size_t bctslotsize;
 	int i;
 
@@ -317,8 +319,8 @@ update_bct (int bootfd, void *curbct, void *newbct, struct update_entry_s *ent)
 		fprintf(stderr, "Internal error: incorrect BCT update function for t210\n");
 		return -1;
 	}
-	if ((soctype == TEGRA_SOCTYPE_186 && !bct_update_valid_t18x(curbct, newbct, &block_size, &page_size)) ||
-	    (soctype == TEGRA_SOCTYPE_194 && !bct_update_valid_t19x(curbct, newbct, &block_size, &page_size))) {
+	if ((soctype == TEGRA_SOCTYPE_186 && !bct_update_valid_t18x(curbct, newbct)) ||
+	    (soctype == TEGRA_SOCTYPE_194 && !bct_update_valid_t19x(curbct, newbct))) {
 		printf("[FAIL]\n");
 		fprintf(stderr, "Error: validation check failed for BCT update\n");
 		return -1;

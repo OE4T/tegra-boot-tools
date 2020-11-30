@@ -12,9 +12,7 @@
  * bct_update_valid_t19x
  */
 int
-bct_update_valid_t19x (void *cur_bct, void *cand_bct,
-		       unsigned int *block_size,
-		       unsigned int *page_size)
+bct_update_valid_t19x (void *cur_bct, void *cand_bct)
 {
 	NvBootConfigTable *cur = cur_bct;
 	NvBootConfigTable *cand = cand_bct;
@@ -25,10 +23,8 @@ bct_update_valid_t19x (void *cur_bct, void *cand_bct,
 		return 0;
 	if (cur->BlockSizeLog2 != cand->BlockSizeLog2)
 		return 0;
-	*block_size = (1U << cur->BlockSizeLog2);
 	if (cur->PageSizeLog2 != cand->PageSizeLog2)
 		return 0;
-	*page_size = (1U << cur->PageSizeLog2);
 
 	return 1;
 

@@ -9,6 +9,7 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <getopt.h>
 #include <string.h>
@@ -65,6 +66,7 @@ static size_t contentbuf_size;
 static uint8_t *contentbuf, *slotbuf;
 static int bct_updated;
 static tegra_soctype_t soctype = TEGRA_SOCTYPE_INVALID;
+static bool spiboot_platform;
 
 static void
 print_usage (void)
@@ -131,8 +133,12 @@ set_bootdev_writeable_status (const char *bootdev, int make_writeable)
  * Special handling for writing the BCT. Content to be
  * written expected to be present in contentbuf.
  *
- * A BCT slot is 0xE00 = 3584 bytes.
- * A block is 16KiB and holds multiple slots.
+ * For tegra186/tegra194 platforms only.
+ *
+ * A block is 16KiB or 32KiB and holds multiple slots;
+ * each slot is an even number of "pages" in size, where
+ * the page size is 512 bytes for eMMC devices and 2KiB for
+ * SPI flash.
  * The Tegra bootrom can handle up to 63 blocks, but
  * in practice, only block 0 slots 0 & 1, and block 1 slot 0
  * are used.
@@ -142,15 +148,15 @@ set_bootdev_writeable_status (const char *bootdev, int make_writeable)
  *
  */
 static int
-update_bct (int bootfd, void *curbct, struct update_entry_s *ent)
+update_bct (int bootfd, void *curbct, void *newbct, struct update_entry_s *ent)
 {
 	ssize_t n, total, remain;
-	unsigned int block_size = 16384;
-	unsigned int page_size = 512;
+	unsigned int block_size = (spiboot_platform ? 32768 : 16384);
+	unsigned int page_size = (spiboot_platform ? 2048 : 512);
 	int i;
 
-	if ((soctype == TEGRA_SOCTYPE_186 && !bct_update_valid_t18x(slotbuf, curbct, &block_size, &page_size)) ||
-	    (soctype == TEGRA_SOCTYPE_194 && !bct_update_valid_t19x(slotbuf, curbct, &block_size, &page_size))) {
+	if ((soctype == TEGRA_SOCTYPE_186 && !bct_update_valid_t18x(curbct, newbct)) ||
+	    (soctype == TEGRA_SOCTYPE_194 && !bct_update_valid_t19x(curbct, newbct))) {
 		printf("[FAIL]\n");
 		fprintf(stderr, "Error: validation check failed for BCT update\n");
 		return -1;
@@ -230,7 +236,7 @@ maybe_update_bootpart (int bootfd, struct update_entry_s *ent, int is_bct)
 	}
 
 	if (is_bct)
-		return update_bct(bootfd, contentbuf, ent);
+		return update_bct(bootfd, slotbuf, contentbuf, ent);
 
 	if (lseek(bootfd, ent->part->first_lba * 512, SEEK_SET) == (off_t) -1) {
 		printf("[FAIL]\n");
@@ -465,6 +471,8 @@ main (int argc, char * const argv[])
 		perror(argv[optind]);
 		return 1;
 	}
+
+	spiboot_platform = memcmp(bup_boot_device(bupctx), "/dev/mtd", 8) == 0;
 
 	gptctx = gpt_init(bup_gpt_device(bupctx), 512);
 	if (gptctx == NULL) {

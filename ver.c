@@ -14,8 +14,8 @@
 #include <errno.h>
 #include <limits.h>
 #include <ctype.h>
-#include <zlib.h>
 #include "ver.h"
+#include "posix-crc32.h"
 
 /*
  * extract_line
@@ -199,7 +199,7 @@ parse_sizecrc_and_validate (const char *line, void *buf, size_t bufsiz, uint32_t
 	crc = strtoul(anchor + 7, NULL, 10);
 	if (crc == ULONG_MAX)
 		return 1;
-	actual_crc = crc32(0, buf, bufsiz);
+	actual_crc = posix_crc32(buf, bufsiz);
 	if (actual_crc != (uint32_t) crc) {
 		errno = EPROTO;
 		return 1;

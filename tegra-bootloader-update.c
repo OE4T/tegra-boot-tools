@@ -16,7 +16,9 @@
 #include <unistd.h>
 #include <limits.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <tegra-eeprom/cvm.h>
+#include <zlib.h>
 #include "bup.h"
 #include "gpt.h"
 #include "bct.h"
@@ -764,6 +766,208 @@ order_entries_t210 (struct update_entry_s *orig, struct update_entry_s **ordered
 } /* order_entries_t210 */
 
 /*
+ * nvc_partitions_match
+ *
+ * Checks (via CRC computation) that the NVC partition
+ * and its backup (NVC_R or NVC-1, depending) are identical.
+ *
+ * bootfd: fd to boot device
+ * gptfd:  fd to gpt device
+ * nvc:    array of two update entries - primary and backup NVC
+ *
+ * Returns:
+ *    true:  NVCs are present with identical contents
+ *    false: either an NVC is missing or the contents do not match
+ */
+static bool
+nvc_parts_match (int bootfd, int gptfd, struct update_entry_s *nvc[2])
+{
+	int i, fd;
+	off_t offset;
+	size_t partsize;
+	uint32_t crc[2];
+
+	if (nvc[0] == NULL || nvc[0]->part == NULL || nvc[1] == NULL || nvc[1]->part == NULL)
+		return false;
+
+	for (i = 0; i < 2; i++) {
+		fd = bootfd;
+		offset = nvc[i]->part->first_lba * 512;
+		partsize = (nvc[i]->part->last_lba - nvc[i]->part->first_lba + 1) * 512;
+		if (offset >= bootdev_size) {
+			fd = gptfd;
+			offset -= bootdev_size;
+		}
+		if (read_completely_at(fd, slotbuf, partsize, offset) < 0)
+			return false;
+		crc[i] = crc32(0, slotbuf, partsize);
+	}
+
+	return crc[0] == crc[1];
+
+} /* nvc_parts_match */
+
+/*
+ * invalid_version_or_downgrade
+ *
+ * Performs checks on the current version info partitions vs.
+ * the information in the payload, and returns true if the
+ * update should not be performed because (a) the version partitions
+ * are corrupted, or (b) the payload was built from an older BSP
+ * version.
+ *
+ * Logic should be equivalent to that in the L4T updater script.
+ *
+ * bupctx: BUP context pointer
+ * bootfd: fd for the boot device
+ * gptfd:  fd for the GPT device
+ * entry_list: list of BUP entries to be processed
+ * entry_count: number of entries in list
+ *
+ * Returns:
+ *    true:  cannot apply the update
+ *    false: OK to apply the update
+ */
+static bool
+invalid_version_or_downgrade (bup_context_t *bupctx, int bootfd, int gptfd,
+			      struct update_entry_s *entry_list, size_t entry_count)
+{
+	struct update_entry_s *ver[2], *nvc[2];
+	struct ver_info_s verinfo[2], bup_verinfo;
+	off_t offset;
+	char ver_b_name[64], nvc_b_name[64];
+	ssize_t total, n;
+	unsigned int i;
+	int fd;
+
+	ver[0] = ver[1] = nvc[0] = nvc[1]  = NULL;
+	sprintf(ver_b_name, redundant_part_format("VER"), "VER");
+	sprintf(nvc_b_name, redundant_part_format("NVC"), "NVC");
+	for (i = 0; i < entry_count; i += 1)
+		if (strcmp(entry_list[i].partname, "VER") == 0)
+			ver[0] = &entry_list[i];
+		else if (strcmp(entry_list[i].partname, "NVC") == 0)
+			nvc[0] = &entry_list[i];
+		else if (strcmp(entry_list[i].partname, ver_b_name) == 0)
+			ver[1] = &entry_list[i];
+		else if (strcmp(entry_list[i].partname, nvc_b_name) == 0)
+			nvc[1] = &entry_list[i];
+
+	/*
+	 * Update payloads that do not update the boot chain do not contain
+	 * a VER entry, and that's OK
+	 */
+	if (ver[0] == NULL)
+		return false;
+
+	/*
+	 * Read the version info from the payload
+	 */
+	if (bup_setpos(bupctx, ver[0]->bup_offset) == (off_t) -1) {
+		fprintf(stderr, "Error: could not find version info in BUP payload\n");
+		return true;
+	}
+	for (total = 0; total < ver[0]->length; total += n) {
+		n = bup_read(bupctx, contentbuf + total, contentbuf_size - total);
+		if (n <= 0) {
+			fprintf(stderr, "Error reading version info from BUP payload");
+			return true;
+		}
+	}
+	if (ver_extract_info(contentbuf, ver[0]->length, &bup_verinfo) != 0) {
+		fprintf(stderr, "Error validating version info in BUP payload: %s\n",
+			strerror(errno));
+		return true;
+	}
+
+	for (i = 0; i < 2; i += 1) {
+		size_t partsize;
+		memset(&verinfo[i], 0, sizeof(verinfo[i]));
+		if (ver[i] == NULL)
+			continue;
+		if (ver[i]->part == NULL) {
+			fprintf(stderr, "Error locating %s partition\n", ver[i]->partname);
+			return true;
+		}
+		fd = bootfd;
+		offset = ver[i]->part->first_lba * 512;
+		if (offset >= bootdev_size) {
+			fd = gptfd;
+			offset -= bootdev_size;
+		}
+		partsize = (ver[i]->part->last_lba - ver[i]->part->first_lba + 1) * 512;
+		if (read_completely_at(fd, slotbuf, partsize, offset) < 0) {
+			fprintf(stderr, "Error reading %s partition: %s\n", ver[i]->partname, strerror(errno));
+			return true;
+		}
+		/*
+		 * We don't check the return code here, since we can recover if
+		 * just one is valid, in some cases
+		 */
+		ver_extract_info(slotbuf, partsize, &verinfo[i]);
+	}
+	/*
+	 * If both version partitions match and have a non-zero version (thus are valid),
+	 * check for a rollback - downgrading can brick the device, so don't allow it.
+	 */
+	if (verinfo[0].bsp_version == verinfo[1].bsp_version && verinfo[0].bsp_version != 0) {
+		if (verinfo[0].bsp_version > bup_verinfo.bsp_version) {
+			fprintf(stderr, "Error: current bootloader version is %u.%u.%u; cannot roll back to %u.%u.%u\n",
+				bsp_version_major(verinfo[0].bsp_version),
+				bsp_version_minor(verinfo[0].bsp_version),
+				bsp_version_maint(verinfo[0].bsp_version),
+				bsp_version_major(bup_verinfo.bsp_version),
+				bsp_version_minor(bup_verinfo.bsp_version),
+				bsp_version_maint(bup_verinfo.bsp_version));
+			return true;
+		}
+		/*
+		 * Validate that the last update was completely applied by comparing the
+		 * NVC partition against its redundant copy.  If there's a mismatch, something
+		 * went wrong and we cannot apply the update.
+		 */
+		if (verinfo[0].crc == verinfo[1].crc && !nvc_parts_match(bootfd, gptfd, nvc)) {
+			fprintf(stderr, "Error: NVC partition mismatch - reflash required\n");
+			return true;
+		}
+
+		/*
+		 * This is OK - no further checks required
+		 */
+		return false;
+	}
+
+	/*
+	 * If the VER_b partition is invalid, but the primary VER is valid, that's OK - just check for a rollback.
+	 * Otherwise, if VER_b is valid, the update can be applied if the BUP version exactly matches VER_b's version.
+	 * Otherwise, if none of the checks have worked so far, something is wrong.
+	 */
+	if (verinfo[1].bsp_version == 0 && verinfo[0].bsp_version != 0 &&
+	    verinfo[0].bsp_version > bup_verinfo.bsp_version) {
+		fprintf(stderr, "Error: current bootloader version is %u.%u.%u; cannot downgrade to %u.%u.%u\n",
+			bsp_version_major(verinfo[0].bsp_version),
+			bsp_version_minor(verinfo[0].bsp_version),
+			bsp_version_maint(verinfo[0].bsp_version),
+			bsp_version_major(bup_verinfo.bsp_version),
+			bsp_version_minor(bup_verinfo.bsp_version),
+			bsp_version_maint(bup_verinfo.bsp_version));
+		return true;
+	} else if (verinfo[1].bsp_version != 0 && verinfo[1].bsp_version != bup_verinfo.bsp_version) {
+		fprintf(stderr, "Error: previous update was incomplete; please update with version %u.%u.%u\n",
+			bsp_version_major(verinfo[1].bsp_version),
+			bsp_version_minor(verinfo[1].bsp_version),
+			bsp_version_maint(verinfo[0].bsp_version));
+		return true;
+	} else {
+		fprintf(stderr, "Error: bootloader version partitions are corrupted; cannot apply update\n");
+		return true;
+	}
+
+	return false;
+
+} /* invalid_version_or_downgrade */
+
+/*
  * find_largest_partition
  *
  * Locates the largest partition to be updated, for
@@ -1196,6 +1400,8 @@ main (int argc, char * const argv[])
 
 	if (soctype == TEGRA_SOCTYPE_210) {
 		int bctctx = -1;
+		if (invalid_version_or_downgrade(bupctx, fd, gptfd, redundant_entries, redundant_entry_count))
+			goto reset_and_depart;
 		redundant_entry_count = order_entries_t210(redundant_entries, ordered_entries, redundant_entry_count);
 		if (redundant_entry_count == 0)
 			goto reset_and_depart;

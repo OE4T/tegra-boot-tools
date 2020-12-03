@@ -24,7 +24,7 @@ do_subst = sed -e's,[@]bindir[@],$(bindir),g' \
                -e's,[@]BOOTDEVS[@],$(BOOTDEVS),g'
 
 lib_LTLIBRARIES = libtegra-boot-tools.la
-libtegra_boot_tools_la_SOURCES = smd.c smd.h gpt.c gpt.h bup.c bup.h ver.c ver.h
+libtegra_boot_tools_la_SOURCES = smd.c smd.h gpt.c gpt.h bup.c bup.h ver.c ver.h posix-crc32.c posix-crc32.h
 libtegra_boot_tools_la_CFLAGS = $(ZLIB_CFLAGS) $(TEGRA_EEPROM_CFLAGS)
 libtegra_boot_tools_la_CPPFLAGS = -DCONFIGPATH="$(tbtdir)"
 libtegra_boot_tools_la_LIBADD = $(ZLIB_LIBS) $(TEGRA_EEPROM_LIBS)

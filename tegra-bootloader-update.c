@@ -21,6 +21,7 @@
 #include "gpt.h"
 #include "bct.h"
 #include "smd.h"
+#include "ver.h"
 #include "config.h"
 
 static struct option options[] = {

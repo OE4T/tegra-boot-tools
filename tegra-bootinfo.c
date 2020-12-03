@@ -189,22 +189,23 @@ struct devinfo_context {
  *  8191         =       base devinfo copy A       =  3FFE00
  *
  */
-static const off_t devinfo_offset_non_t21x[2] = {
+#define OFFSET_COUNT 2
+static const off_t devinfo_offset_non_t21x[OFFSET_COUNT] = {
 	[0] = -((36 + 1) * 512),
 	[1] = -((36 + 2) * 512),
 };
 
-static const off_t extension_offset_non_t21x[2] = {
+static const off_t extension_offset_non_t21x[OFFSET_COUNT] = {
 	[0] = -((EXTENSION_SECTOR_COUNT + 36 + 2) * 512),
 	[1] = -((EXTENSION_SECTOR_COUNT * 2 + 36 + 2) * 512),
 };
 
-static const off_t devinfo_offset_t21x[2] = {
+static const off_t devinfo_offset_t21x[OFFSET_COUNT] = {
 	[0] = -512,
 	[1] = -(65536 + 512),
 };
 
-static const off_t extension_offset_t21x[2] = {
+static const off_t extension_offset_t21x[OFFSET_COUNT] = {
 	[0] = -((EXTENSION_SECTOR_COUNT + 2) * 512),
 	[1] = -(65536 + (EXTENSION_SECTOR_COUNT + 2) * 512),
 };
@@ -556,7 +557,7 @@ find_bootinfo (int readonly, struct devinfo_context **ctxp)
 		free(ctx);
 		return -1;
 	}
-	for (i = 0; i < sizeof(devinfo_offset)/sizeof(devinfo_offset[0]); i++) {
+	for (i = 0; i < OFFSET_COUNT; i++) {
 		/*
 		 * Read base block
 		 */

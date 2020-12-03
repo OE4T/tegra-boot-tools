@@ -830,8 +830,8 @@ error_depart:
 int
 main (int argc, char * const argv[])
 {
-	int c, which, fd, gptfd, err;
-	int reset_bootdev, reset_gptdev;
+	int c, which, fd = -1, gptfd, err;
+	int reset_bootdev = 0, reset_gptdev;
 	gpt_context_t *gptctx;
 	bup_context_t *bupctx;
 	smd_context_t *smdctx = NULL;
@@ -993,10 +993,9 @@ main (int argc, char * const argv[])
 		}
 	}
 
-	if (dryrun) {
-		reset_bootdev = 0;
+	if (dryrun)
 		fd = open(bootdev, O_RDONLY);
-	} else {
+	else {
 		reset_bootdev = set_bootdev_writeable_status(bootdev, 1);
 		fd = open(bootdev, O_RDWR);
 	}

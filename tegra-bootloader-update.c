@@ -1036,7 +1036,7 @@ int
 main (int argc, char * const argv[])
 {
 	int c, which, fd = -1, gptfd, err;
-	int reset_bootdev = 0, reset_gptdev;
+	int reset_bootdev = 0, reset_gptdev = 0;
 	gpt_context_t *gptctx;
 	bup_context_t *bupctx;
 	smd_context_t *smdctx = NULL;
@@ -1186,12 +1186,15 @@ main (int argc, char * const argv[])
 		return 1;
 	}
 
-	if (spiboot_platform || dryrun) {
-		reset_gptdev = 0;
+	if (spiboot_platform)
 		gptfd = -1;
-	} else {
-		reset_gptdev = set_bootdev_writeable_status(bup_gpt_device(bupctx), 1);
-		gptfd = open(bup_gpt_device(bupctx), O_RDWR);
+	else {
+		if (dryrun)
+			gptfd = open(bup_gpt_device(bupctx), O_RDONLY);
+		else {
+			reset_gptdev = set_bootdev_writeable_status(bup_gpt_device(bupctx), 1);
+			gptfd = open(bup_gpt_device(bupctx), O_RDWR);
+		}
 		if (gptfd < 0) {
 			perror(bup_gpt_device(bupctx));
 			goto reset_and_depart;

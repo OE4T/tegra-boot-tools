@@ -4,7 +4,7 @@
  * Tool for updating/initializing Tegra boot partitions
  * using a BUP package.
  *
- * Copyright (c) 2019-2020, Matthew Madison
+ * Copyright (c) 2019-2021, Matthew Madison
  */
 
 #include <stdio.h>
@@ -823,6 +823,7 @@ nvc_parts_match (int bootfd, int gptfd, struct update_entry_s *nvc[2])
  * gptfd:  fd for the GPT device
  * entry_list: list of BUP entries to be processed
  * entry_count: number of entries in list
+ * force_initialize: don't check for downgrade or bad VER partitions
  *
  * Returns:
  *    true:  cannot apply the update
@@ -830,7 +831,8 @@ nvc_parts_match (int bootfd, int gptfd, struct update_entry_s *nvc[2])
  */
 static bool
 invalid_version_or_downgrade (bup_context_t *bupctx, int bootfd, int gptfd,
-			      struct update_entry_s *entry_list, size_t entry_count)
+			      struct update_entry_s *entry_list, size_t entry_count,
+			      bool force_initialize)
 {
 	struct update_entry_s *ver[2], *nvc[2];
 	struct ver_info_s verinfo[2], bup_verinfo;
@@ -944,6 +946,16 @@ invalid_version_or_downgrade (bup_context_t *bupctx, int bootfd, int gptfd,
 	 */
 	if (verinfo[1].bsp_version == 0 && verinfo[0].bsp_version != 0 &&
 	    verinfo[0].bsp_version > bup_verinfo.bsp_version) {
+		if (force_initialize) {
+			fprintf(stderr, "Warning: downgrading bootloader from %u.%u.%u to %u.%u.%u\n",
+				bsp_version_major(verinfo[0].bsp_version),
+				bsp_version_minor(verinfo[0].bsp_version),
+				bsp_version_maint(verinfo[0].bsp_version),
+				bsp_version_major(bup_verinfo.bsp_version),
+				bsp_version_minor(bup_verinfo.bsp_version),
+				bsp_version_maint(bup_verinfo.bsp_version));
+			return false;
+		}
 		fprintf(stderr, "Error: current bootloader version is %u.%u.%u; cannot downgrade to %u.%u.%u\n",
 			bsp_version_major(verinfo[0].bsp_version),
 			bsp_version_minor(verinfo[0].bsp_version),
@@ -958,6 +970,9 @@ invalid_version_or_downgrade (bup_context_t *bupctx, int bootfd, int gptfd,
 			bsp_version_minor(verinfo[1].bsp_version),
 			bsp_version_maint(verinfo[0].bsp_version));
 		return true;
+	} else if (force_initialize) {
+		fprintf(stderr, "Warning: bootloader version partitions were corrupted\n");
+		return false;
 	} else {
 		fprintf(stderr, "Error: bootloader version partitions are corrupted; cannot apply update\n");
 		return true;
@@ -1139,8 +1154,12 @@ main (int argc, char * const argv[])
 			fprintf(stderr, "Error: unsupported operation for t210 platform\n");
 			return 1;
 		}
-		// on t210, the operation is always 'initialize'
-		initialize = 1;
+		/*
+		 * On t210, the operation is always 'initialize'.
+		 * If the user explicitly used the -i option, treat that
+		 * as a forced initialization, even if the version checks fail.
+		 */
+		initialize += 1;
 	} else {
 		fprintf(stderr, "Error: unrecognized SoC type\n");
 		return 1;
@@ -1403,7 +1422,7 @@ main (int argc, char * const argv[])
 
 	if (soctype == TEGRA_SOCTYPE_210) {
 		int bctctx = -1;
-		if (invalid_version_or_downgrade(bupctx, fd, gptfd, redundant_entries, redundant_entry_count))
+		if (invalid_version_or_downgrade(bupctx, fd, gptfd, redundant_entries, redundant_entry_count, (initialize > 1)))
 			goto reset_and_depart;
 		redundant_entry_count = order_entries_t210(redundant_entries, ordered_entries, redundant_entry_count);
 		if (redundant_entry_count == 0)

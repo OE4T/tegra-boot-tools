@@ -3,7 +3,7 @@
  *
  * Functions for working with the Tegra boot slot metadata.
  *
- * Copyright (c) 2020, Matthew Madison
+ * Copyright (c) 2020-2021, Matthew Madison
  *
  */
 #include <stdbool.h>
@@ -26,7 +26,7 @@ struct slot_info_s {
 } __attribute__((packed));
 
 #define SMD_VER_MIN 1U
-#define SMD_VER_MAX 3U
+#define SMD_VER_MAX 4U
 
 struct smd_s {
 	char magic[4];
@@ -37,10 +37,46 @@ struct smd_s {
 	uint32_t crc32;
 } __attribute__((packed));
 
+struct smd_rootfsab_ext_s {
+	uint8_t rootfs_selection;
+	uint8_t rootfs_status[2];
+	uint8_t rootfs_update_mode[2];
+	uint8_t reserved__[3];
+} __attribute__((packed));
+
+struct smd_log_entry_s {
+	uint32_t ent_event;
+	uint32_t ent_time;
+} __attribute__((packed));
+
+struct smd_log_ext_s {
+	uint32_t version;
+	uint32_t begin_index;
+	uint32_t end_index;
+	uint32_t reserved__;
+	struct smd_log_entry_s log_buffer[16];
+} __attribute__((packed));
+
+struct smd_extension_s {
+	uint32_t crc32;
+	uint32_t len;
+	char magic[4];
+	uint32_t version;
+	struct smd_rootfsab_ext_s rootfs_ab;
+	uint8_t max_bl_retry_count;
+	struct smd_log_ext_s log;
+} __attribute__((packed));
+
+struct smd_v4_s {
+	struct smd_s smd;
+	struct smd_extension_s ext;
+} __attribute__((packed));
+
 static const char smd_magic[4] = {'\0', 'N', 'B', 'C'};
+static const char ext_magic[4] = {'E', 'N', 'B', 'C'};
 
 struct smd_context_s {
-	struct smd_s smd_ods;
+	struct smd_v4_s smd_ods;
 	char suffixes[2][3];
 	bool needs_update;
 };
@@ -74,23 +110,48 @@ smd_init (gpt_context_t *boot_gpt, int bootfd)
 			continue;
 		if (lseek(bootfd, part->first_lba * 512, SEEK_SET) == (off_t) -1)
 			continue;
-		for (remain = sizeof(ctx->smd_ods), total = 0; remain > 0; total += n, remain -= n) {
-			n = read(bootfd, (uint8_t *) &ctx->smd_ods + total, remain);
+		for (remain = sizeof(ctx->smd_ods.smd), total = 0; remain > 0; total += n, remain -= n) {
+			n = read(bootfd, (uint8_t *) &ctx->smd_ods.smd + total, remain);
 			if (n <= 0)
 				continue;
 		}
 
-		if (memcmp(ctx->smd_ods.magic, smd_magic, sizeof(smd_magic)) != 0)
+		if (memcmp(ctx->smd_ods.smd.magic, smd_magic, sizeof(smd_magic)) != 0)
 			continue;
 		/*
 		 * There were versions 1 and 2 of the metadata, but we only
-		 * support version 3 (and later, should there be more) here.
+		 * support version 3 and later here.
 		 */
-		if (ctx->smd_ods.version >= 3) {
-			uint32_t crc = crc32(0, (void *) &ctx->smd_ods, sizeof(ctx->smd_ods)-sizeof(uint32_t));
-			if (crc == ctx->smd_ods.crc32)
-				break;
+		if (ctx->smd_ods.smd.version >= 3) {
+			uint32_t crc = crc32(0, (void *) &ctx->smd_ods.smd, sizeof(ctx->smd_ods.smd)-sizeof(uint32_t));
+			if (crc != ctx->smd_ods.smd.crc32)
+				continue;
 		}
+
+		if (memcmp(ctx->smd_ods.smd.magic, smd_magic, sizeof(smd_magic)) != 0)
+			continue;
+
+		/*
+		 * Version 4 adds an extension structure for rootfs A/B switching
+		 * and (potentially) logging.
+		 */
+		if (ctx->smd_ods.smd.version >= 4) {
+			uint32_t extcrc;
+			for (remain = sizeof(ctx->smd_ods.ext), total = 0; remain > 0; total += n, remain -= n) {
+				n = read(bootfd, (uint8_t *) &ctx->smd_ods.ext + total, remain);
+				if (n <= 0)
+					continue;
+			}
+			if (ctx->smd_ods.ext.len > sizeof(ctx->smd_ods.ext) - sizeof(uint32_t))
+				continue;
+			extcrc = crc32(0, (void *) &ctx->smd_ods.ext.len, ctx->smd_ods.ext.len);
+			if (extcrc != ctx->smd_ods.ext.crc32)
+				continue;
+			if (memcmp(ctx->smd_ods.ext.magic, ext_magic, sizeof(ext_magic)) != 0)
+				continue;
+			break;
+		}
+
 	}
 	/*
 	 * If no valid SMD after looking at both partitions, punt.
@@ -102,7 +163,7 @@ smd_init (gpt_context_t *boot_gpt, int bootfd)
 	}
 
 	for (i = 0; i < 2; i++) {
-		struct slot_info_s *s = &ctx->smd_ods.slot_info[i];
+		struct slot_info_s *s = &ctx->smd_ods.smd.slot_info[i];
 		ctx->suffixes[i][0] = s->suffix[0];
 		ctx->suffixes[i][1] = s->suffix[1];
 		ctx->suffixes[i][2] = '\0';
@@ -136,14 +197,14 @@ smd_new (smd_redundancy_level_t level)
 	strcpy((char *) ctx->suffixes[0], "_a");
 	strcpy((char *) ctx->suffixes[1], "_b");
 	ctx->needs_update = true;
-	memcpy(ctx->smd_ods.magic, smd_magic, sizeof(ctx->smd_ods.magic));
-	ctx->smd_ods.version = 3;
-	ctx->smd_ods.maxslots = 1;
-	ctx->smd_ods.slot_info[0].priority = 15;
-	ctx->smd_ods.slot_info[0].suffix[0] = ctx->suffixes[0][0];
-	ctx->smd_ods.slot_info[0].suffix[1] = ctx->suffixes[0][1];
-	ctx->smd_ods.slot_info[0].retry_count = 7;
-	ctx->smd_ods.slot_info[0].successful = 1;
+	memcpy(ctx->smd_ods.smd.magic, smd_magic, sizeof(ctx->smd_ods.smd.magic));
+	ctx->smd_ods.smd.version = 3;
+	ctx->smd_ods.smd.maxslots = 1;
+	ctx->smd_ods.smd.slot_info[0].priority = 15;
+	ctx->smd_ods.smd.slot_info[0].suffix[0] = ctx->suffixes[0][0];
+	ctx->smd_ods.smd.slot_info[0].suffix[1] = ctx->suffixes[0][1];
+	ctx->smd_ods.smd.slot_info[0].retry_count = 7;
+	ctx->smd_ods.smd.slot_info[0].successful = 1;
 	if (smd_set_redundancy_level(ctx, level) != 0) {
 		free(ctx);
 		return NULL;
@@ -185,7 +246,7 @@ smd_redundancy_level (smd_context_t *ctx)
 		return -1;
 	}
 
-	flags = ctx->smd_ods.flags & 3;
+	flags = ctx->smd_ods.smd.flags & 3;
 	/*
 	 * The lowest bit of the flags is enable/disable
 	 * The next bit is "user" redundancy (which we call "full")
@@ -193,7 +254,7 @@ smd_redundancy_level (smd_context_t *ctx)
 	 * Extra check on the number slots here; should always be 2,
 	 * but if it's 1 (or 0?), then there's really no redundancy.
 	 */
-	if (flags == 0 || flags == 2 || ctx->smd_ods.maxslots < 2)
+	if (flags == 0 || flags == 2 || ctx->smd_ods.smd.maxslots < 2)
 		return REDUNDANCY_OFF;
 	if (flags == 1)
 		return REDUNDANCY_BOOTLOADER_ONLY;
@@ -219,38 +280,38 @@ smd_set_redundancy_level (smd_context_t *ctx, smd_redundancy_level_t level)
 		return -1;
 	}
 
-	old_flags = ctx->smd_ods.flags;
+	old_flags = ctx->smd_ods.smd.flags;
 
 	switch (level) {
 	case REDUNDANCY_OFF:
-		ctx->smd_ods.flags &= ~3U;
-		ctx->smd_ods.maxslots = 1;
-		ctx->smd_ods.slot_info[0].priority = 15;
-		ctx->smd_ods.slot_info[0].retry_count = 7;
-		ctx->smd_ods.slot_info[0].successful = 1;
-		memset(&ctx->smd_ods.slot_info[1], 0, sizeof(ctx->smd_ods.slot_info[1]));
+		ctx->smd_ods.smd.flags &= ~3U;
+		ctx->smd_ods.smd.maxslots = 1;
+		ctx->smd_ods.smd.slot_info[0].priority = 15;
+		ctx->smd_ods.smd.slot_info[0].retry_count = 7;
+		ctx->smd_ods.smd.slot_info[0].successful = 1;
+		memset(&ctx->smd_ods.smd.slot_info[1], 0, sizeof(ctx->smd_ods.smd.slot_info[1]));
 		break;
 	case REDUNDANCY_BOOTLOADER_ONLY:
-		ctx->smd_ods.flags = (ctx->smd_ods.flags & ~3U) | 1U;
+		ctx->smd_ods.smd.flags = (ctx->smd_ods.smd.flags & ~3U) | 1U;
 		/* Slot initialization happens below */
 		break;
 	case REDUNDANCY_FULL:
-		ctx->smd_ods.flags |= 3;
+		ctx->smd_ods.smd.flags |= 3;
 		/* Slot initialization happens below */
 		break;
 	default:
 		errno = EINVAL;
 		return -1;
 	}
-	if (old_flags != ctx->smd_ods.flags) {
+	if (old_flags != ctx->smd_ods.smd.flags) {
 		ctx->needs_update = 1;
 		if (old_flags == 0) {
 			int i;
-			ctx->smd_ods.maxslots = 2;
+			ctx->smd_ods.smd.maxslots = 2;
 			strcpy((char *) ctx->suffixes[0], "_a");
 			strcpy((char *) ctx->suffixes[1], "_b");
 			for (i = 0; i < 2; i++) {
-				struct slot_info_s *s = &ctx->smd_ods.slot_info[i];
+				struct slot_info_s *s = &ctx->smd_ods.smd.slot_info[i];
 				s->priority = 15 - i;
 				s->suffix[0] = ctx->suffixes[i][0];
 				s->suffix[1] = ctx->suffixes[i][1];
@@ -275,11 +336,11 @@ smd_slot_get (smd_context_t *ctx, unsigned int which, smd_slot_t *slot)
 {
 	struct slot_info_s *s;
 
-	if (ctx == NULL || slot == NULL || which >= ctx->smd_ods.maxslots) {
+	if (ctx == NULL || slot == NULL || which >= ctx->smd_ods.smd.maxslots) {
 		errno = EINVAL;
 		return -1;
 	}
-	s = &ctx->smd_ods.slot_info[which];
+	s = &ctx->smd_ods.smd.slot_info[which];
 	slot->slot_prio = s->priority;
 	slot->slot_suffix = (const char *) &ctx->suffixes[which];
 	slot->slot_retry_count = s->retry_count;
@@ -356,7 +417,7 @@ smd_slot_mark_successful (smd_context_t *ctx, unsigned int which)
 	int curslot;
 	struct slot_info_s *s;
 
-	if (which >= ctx->smd_ods.maxslots) {
+	if (which >= ctx->smd_ods.smd.maxslots) {
 		errno = EINVAL;
 		return -1;
 	}
@@ -365,7 +426,7 @@ smd_slot_mark_successful (smd_context_t *ctx, unsigned int which)
 	if (curslot < 0)
 		return -1;
 
-	s = &ctx->smd_ods.slot_info[which];
+	s = &ctx->smd_ods.smd.slot_info[which];
 	ctx->needs_update = (s->successful != 1 || s->retry_count != 7 ||
 			     ((unsigned int) curslot == which && s->priority != 15));
 	s->successful = 1;
@@ -393,17 +454,17 @@ smd_slot_mark_active (smd_context_t *ctx, unsigned int which)
 {
 	struct slot_info_s *s;
 
-	if (which >= ctx->smd_ods.maxslots) {
+	if (which >= ctx->smd_ods.smd.maxslots) {
 		errno = EINVAL;
 		return -1;
 	}
 
-	s = &ctx->smd_ods.slot_info[which];
+	s = &ctx->smd_ods.smd.slot_info[which];
 	ctx->needs_update = (s->priority != 15 ||
-			     ctx->smd_ods.slot_info[1-which].priority != 14 ||
+			     ctx->smd_ods.smd.slot_info[1-which].priority != 14 ||
 			     s->retry_count != 7 || s->successful != 0);
 	s->priority = 15;
-	ctx->smd_ods.slot_info[1-which].priority = 14;
+	ctx->smd_ods.smd.slot_info[1-which].priority = 14;
 	s->retry_count = 7;
 	s->successful = 0;
 
@@ -428,11 +489,12 @@ smd_update (smd_context_t *ctx, gpt_context_t *boot_gpt, int bootfd, bool force)
 
 	if (!(force || ctx->needs_update))
 		return 0;
-	if (ctx->smd_ods.version != 3 || memcmp(ctx->smd_ods.magic, smd_magic, sizeof(ctx->smd_ods.magic)) != 0) {
+	if (ctx->smd_ods.smd.version < 3 ||
+	    memcmp(ctx->smd_ods.smd.magic, smd_magic, sizeof(ctx->smd_ods.smd.magic)) != 0) {
 		errno = EINVAL;
 		return -1;
 	}
-	ctx->smd_ods.crc32 = crc32(0, (void *) &ctx->smd_ods, sizeof(ctx->smd_ods)-sizeof(uint32_t));
+	ctx->smd_ods.smd.crc32 = crc32(0, (void *) &ctx->smd_ods.smd, sizeof(ctx->smd_ods.smd)-sizeof(uint32_t));
 	/*
 	 * Write both the primary and backup copies.
 	 */
@@ -443,7 +505,16 @@ smd_update (smd_context_t *ctx, gpt_context_t *boot_gpt, int bootfd, bool force)
 		if (lseek(bootfd, part->first_lba * 512, SEEK_SET) == (off_t) -1)
 			continue;
 		for (remain = sizeof(ctx->smd_ods), total = 0; remain > 0; total += n, remain -= n) {
-			n = write(bootfd, (uint8_t *) &ctx->smd_ods + total, remain);
+			n = write(bootfd, (uint8_t *) &ctx->smd_ods.smd + total, remain);
+			if (n <= 0)
+				continue;
+		}
+		if (ctx->smd_ods.smd.version < 4)
+			continue;
+		for (remain = ctx->smd_ods.ext.len + sizeof(uint32_t), total = 0;
+		     remain > 0;
+		     total += n, remain -= n) {
+			n = write(bootfd, (uint8_t *) &ctx->smd_ods.ext + total, remain);
 			if (n <= 0)
 				continue;
 		}

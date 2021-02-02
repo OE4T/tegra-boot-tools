@@ -4,10 +4,10 @@ dnl
 dnl Copyright (c) 2019-2021 Matthew Madison
 dnl
 
-AC_INIT([tegra-boot-tools], [2.2.2])
+AC_INIT([tegra-boot-tools], [2.2.3])
 AC_DEFINE([TEGRA_BOOT_TOOLS_VERSION_MAJOR], [2], [Major version])
 AC_DEFINE([TEGRA_BOOT_TOOLS_VERSION_MINOR], [2], [Minor version])
-AC_DEFINE([TEGRA_BOOT_TOOLS_VERSION_MAINT], [2], [Maintenance level])
+AC_DEFINE([TEGRA_BOOT_TOOLS_VERSION_MAINT], [3], [Maintenance level])
 AM_INIT_AUTOMAKE([subdir-objects foreign])
 AM_SILENT_RULES([yes])
 AC_COPYRIGHT([

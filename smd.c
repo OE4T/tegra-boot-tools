@@ -174,7 +174,7 @@ smd_init (gpt_context_t *boot_gpt, int bootfd)
 } /* smd_init */
 
 /*
- * smd_init
+ * smd_new
  *
  * Initialize a new, clear SMD context
  * for redundancy at the specified level.
@@ -407,7 +407,8 @@ smd_get_current_slot (void)
  *
  * Marks a boot slot as successful.  If the slot is
  * also the current slot, it will be marked as active
- * as well (i.e., priority set to 15).
+ * as well (i.e., priority set to 15), and we ensure
+ * that the alternate slot has a lower priority.
  *
  * Returns: 0 on success, -1 on failure
  */
@@ -415,7 +416,7 @@ int
 smd_slot_mark_successful (smd_context_t *ctx, unsigned int which)
 {
 	int curslot;
-	struct slot_info_s *s;
+	struct slot_info_s *s, *other;
 
 	if (which >= ctx->smd_ods.smd.maxslots) {
 		errno = EINVAL;
@@ -427,12 +428,17 @@ smd_slot_mark_successful (smd_context_t *ctx, unsigned int which)
 		return -1;
 
 	s = &ctx->smd_ods.smd.slot_info[which];
+	other = &ctx->smd_ods.smd.slot_info[1-which];
 	ctx->needs_update = (s->successful != 1 || s->retry_count != 7 ||
-			     ((unsigned int) curslot == which && s->priority != 15));
+			     ((unsigned int) curslot == which &&
+			      (s->priority != 15 || other->priority >= s->priority)));
 	s->successful = 1;
 	s->retry_count = 7;
-	if ((unsigned int) curslot == which)
+	if ((unsigned int) curslot == which) {
 		s->priority = 15;
+		if (other->priority >= s->priority)
+			other->priority = s->priority - 1;
+	}
 
 	return 0;
 

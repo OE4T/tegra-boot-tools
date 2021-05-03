@@ -287,7 +287,7 @@ update_bct (int bootfd, void *curbct, void *newbct, struct update_entry_s *ent)
 	bctslotsize = page_size * ((ent->length + (page_size-1)) / page_size);
 
 	for (i = 0; i < 3; i++) {
-		off_t offset;
+		off_t offset = 0;
 		switch (i) {
 			case 0:
 				offset = bctslotsize;

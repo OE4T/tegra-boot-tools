@@ -275,12 +275,12 @@ main (int argc, char * const argv[])
 		return 0;
 	}
 
-	gptctx = gpt_init(gptdev, 512);
+	gptctx = gpt_init(gptdev, 512, 0);
 	if (gptctx == NULL) {
 		perror("boot sector GPT");
 		return 1;
 	}
-	if (gpt_load(gptctx, GPT_LOAD_BACKUP_ONLY|GPT_NVIDIA_SPECIAL)) {
+	if (gpt_load(gptctx, GPT_BACKUP_ONLY|GPT_NVIDIA_SPECIAL)) {
 		fprintf(stderr, "Error: cannot load boot sector partition table\n");
 		gpt_finish(gptctx);
 		return 1;

@@ -55,6 +55,7 @@ AC_DEFINE_UNQUOTED([EXTENSION_SECTOR_COUNT], [$with_extended_sector_count], [Num
 
 PKG_PROG_PKG_CONFIG([0.29])
 PKG_CHECK_MODULES([ZLIB], [zlib])
+PKG_CHECK_MODULES([UUID], [uuid])
 PKG_CHECK_MODULES([TEGRA_EEPROM], [tegra-eeprom])
 
 AS_IF([test "x$with_systemdsystemunitdir" = "xcheck"],

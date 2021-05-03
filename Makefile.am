@@ -25,10 +25,10 @@ do_subst = sed -e's,[@]bindir[@],$(bindir),g' \
 
 lib_LTLIBRARIES = libtegra-boot-tools.la
 libtegra_boot_tools_la_SOURCES = smd.c smd.h gpt.c gpt.h bup.c bup.h ver.c ver.h posix-crc32.c posix-crc32.h
-libtegra_boot_tools_la_CFLAGS = $(ZLIB_CFLAGS) $(TEGRA_EEPROM_CFLAGS)
+libtegra_boot_tools_la_CFLAGS = $(ZLIB_CFLAGS) $(UUID_CFLAGS) $(TEGRA_EEPROM_CFLAGS)
 libtegra_boot_tools_la_CPPFLAGS = -DCONFIGPATH="$(tbtdir)"
-libtegra_boot_tools_la_LIBADD = $(ZLIB_LIBS) $(TEGRA_EEPROM_LIBS)
-libtegra_boot_tools_la_LDFLAGS = $(ZLIB_LDFLAGS) $(TEGRA_EEPROM_LDFLAGS)
+libtegra_boot_tools_la_LIBADD = $(ZLIB_LIBS) $(UUID_LIBS) $(TEGRA_EEPROM_LIBS)
+libtegra_boot_tools_la_LDFLAGS = $(ZLIB_LDFLAGS) $(UUID_LIBS) $(TEGRA_EEPROM_LDFLAGS)
 tbtinc_HEADERS = smd.h gpt.h bup.h
 pkgconfig_DATA = tegra-boot-tools.pc
 

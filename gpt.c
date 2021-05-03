@@ -65,8 +65,8 @@ struct gpt_context_s {
 	unsigned int blocksize;
 	off_t devsize;
 	void *buffer;
-	int is_mmcboot1;
-	int primary_valid, backup_valid;
+	bool is_mmcboot1;
+	bool primary_valid, backup_valid;
 	struct gpt_header_s primary_header;
 	struct gpt_header_s backup_header;
 	unsigned int entry_count;

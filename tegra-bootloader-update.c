@@ -144,29 +144,29 @@ print_usage (void)
  * devices, if present.
  *
  * bootdev: device name
- * make_writeable: 1 for writeable, 0 to disable writes
+ * make_writeable: true for wrieable, false otherwise
  *
- * Returns: 1 if device status changed, 0 if not.
+ * Returns: true if changed, false otherwise
  *
  */
-static int
-set_bootdev_writeable_status (const char *bootdev, int make_writeable)
+static bool
+set_bootdev_writeable_status (const char *bootdev, bool make_writeable)
 {
 	char pathname[64];
 	char buf[1];
 	int fd, is_writeable, rc = 0;
 
 	if (bootdev == NULL)
-		return 0;
+		return false;
 	if (strlen(bootdev) < 6 || strlen(bootdev) > 32)
-		return 0;
+		return false;
 	sprintf(pathname, "/sys/block/%s/force_ro", bootdev + 5);
 	fd = open(pathname, O_RDWR);
 	if (fd < 0)
-		return 0;
+		return false;
 	if (read(fd, buf, sizeof(buf)) != sizeof(buf)) {
 		close(fd);
-		return 0;
+		return false;
 	}
 	make_writeable = !!make_writeable;
 	is_writeable = buf[0] == '0';
@@ -1061,7 +1061,7 @@ int
 main (int argc, char * const argv[])
 {
 	int c, which, fd = -1, gptfd = -1, err;
-	int reset_bootdev = 0, reset_gptdev = 0;
+	bool reset_bootdev = false, reset_gptdev = false;
 	gpt_context_t *gptctx = NULL;
 	bup_context_t *bupctx = NULL;
 	smd_context_t *smdctx = NULL;
@@ -1202,7 +1202,7 @@ main (int argc, char * const argv[])
 		if (dryrun)
 			gptfd = open(bup_gpt_device(bupctx), O_RDONLY);
 		else {
-			reset_gptdev = set_bootdev_writeable_status(bup_gpt_device(bupctx), 1);
+			reset_gptdev = set_bootdev_writeable_status(bup_gpt_device(bupctx), true);
 			gptfd = open(bup_gpt_device(bupctx), O_RDWR);
 		}
 		if (gptfd < 0) {
@@ -1214,7 +1214,7 @@ main (int argc, char * const argv[])
 	if (dryrun)
 		fd = open(bootdev, O_RDONLY);
 	else {
-		reset_bootdev = set_bootdev_writeable_status(bootdev, 1);
+		reset_bootdev = set_bootdev_writeable_status(bootdev, true);
 		fd = open(bootdev, O_RDWR);
 	}
 	if (fd < 0) {
@@ -1504,9 +1504,9 @@ main (int argc, char * const argv[])
 		close(gptfd);
 	}
 	if (reset_bootdev)
-		set_bootdev_writeable_status(bootdev, 0);
+		set_bootdev_writeable_status(bootdev, false);
 	if (reset_gptdev)
-		set_bootdev_writeable_status(bup_gpt_device(bupctx), 0);
+		set_bootdev_writeable_status(bup_gpt_device(bupctx), false);
 	if (slotbuf)
 		free(slotbuf);
 	if (contentbuf)

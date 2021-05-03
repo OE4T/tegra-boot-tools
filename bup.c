@@ -3,10 +3,11 @@
  *
  * Functions for parsing a Tegra bootloader update payload.
  *
- * Copyright (c) 2019, 2020 Matthew Madison
+ * Copyright (c) 2019-2021, Matthew Madison
  *
  */
 #include <stdio.h>
+#include <stdbool.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
@@ -140,9 +141,9 @@ spec_split (const char *specstr, struct tnspec_s *tnspec)
  * Order of arguments is important for wildcard field
  * matching.
  *
- * Returns non-zero on match, 0 on no-match.
+ * Returns: bool
  */
-static int
+static bool
 specs_match (const struct tnspec_s *e, const struct tnspec_s *s)
 {
 	int i;
@@ -150,12 +151,12 @@ specs_match (const struct tnspec_s *e, const struct tnspec_s *s)
 	 * Null spec in entry in wildcard
 	 */
 	if (e->field_count == 0)
-		return 1;
+		return true;
 	/*
 	 * Otherwise, number of fields in specs must match
 	 */
 	if (e->field_count != s->field_count)
-		return 0;
+		return false;
 
 	/*
 	 * Now check each field
@@ -212,6 +213,8 @@ rstrip (char *out, const char *in, size_t len)
  * Constructs the TNSPEC for the current system from
  * the EEPROM boardspec, machine name from our config file,
  * and our boot device from our config file.
+ *
+ * Returns the length of the tnspec.
  */
 static int
 construct_tnspec (char *buf, size_t bufsiz)
@@ -450,10 +453,10 @@ bup_tnspec (bup_context_t *ctx)
  * First call should be with iterctx pointing to NULL (0). Do not modify
  * iterctx between calls.
  *
- * Returns non-zero on success, 0 on failure.
+ * Returns bool: true on success, false on failure.
  * 
  */
-int
+bool
 bup_enumerate_entries (bup_context_t *ctx, void **iterctx, const char **partname,
 		       off_t *offset, size_t *length, unsigned int *version)
 {
@@ -473,7 +476,7 @@ bup_enumerate_entries (bup_context_t *ctx, void **iterctx, const char **partname
 	}
 	if (i >= ctx->entry_count) {
 		*iterctx = 0;
-		return 0;
+		return false;
 	}
 
 	*partname = ctx->entries[i].partition;
@@ -482,20 +485,27 @@ bup_enumerate_entries (bup_context_t *ctx, void **iterctx, const char **partname
 	*version = (unsigned int)(ctx->entries[i].version);
 	start = i;
 	*iterctx = (void *)(start + 1);
-	return 1;
+	return true;
 
 } /* bup_enumerate_entries */
 
 
 #define MAX_PARTS 64
-static int
+
+/*
+ * in_list
+ *
+ * returns true if a character string is found in the
+ * array of strings pointed to by list, false otherwise.
+ */
+static bool
 in_list (const char **list, unsigned int listsize, const char *val)
 {
 	unsigned int i;
 	for (i = 0; i < listsize; i++)
 		if (strcmp(list[i], val) == 0)
-			return 1;
-	return 0;
+			return true;
+	return false;
 } /* in_list */
 
 /*

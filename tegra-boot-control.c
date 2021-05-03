@@ -17,6 +17,7 @@
 #include <tegra-eeprom/cvm.h>
 #include "gpt.h"
 #include "smd.h"
+#include "util.h"
 #include "config.h"
 
 static struct option options[] = {
@@ -85,46 +86,6 @@ print_usage (void)
 } /* print_usage */
 
 /*
- * set_bootdev_writeable_status
- */
-static int
-set_bootdev_writeable_status (const char *bootdev, int make_writeable)
-{
-	char pathname[64];
-	char buf[1];
-	int fd, is_writeable, rc = 0;
-
-	if (bootdev == NULL)
-		return 0;
-	if (strlen(bootdev) < 6 || strlen(bootdev) > 32)
-		return 0;
-	sprintf(pathname, "/sys/block/%s/force_ro", bootdev + 5);
-	fd = open(pathname, O_RDWR);
-	if (fd < 0)
-		return 0;
-	if (read(fd, buf, sizeof(buf)) != sizeof(buf)) {
-		close(fd);
-		return 0;
-	}
-	make_writeable = !!make_writeable;
-	is_writeable = buf[0] == '0';
-	if (make_writeable && !is_writeable) {
-		if (write(fd, "0", 1) != 1)
-			rc = 1;
-	} else if (!make_writeable && is_writeable) {
-		if (write(fd, "1", 1) != 1)
-			rc = 1;
-	}
-	close(fd);
-
-	if (rc)
-		fprintf(stderr, "warning: could not change boot device write status\n");
-
-	return make_writeable != is_writeable;
-
-} /* set_bootdev_writeable_status */
-
-/*
  * print_smd_info
  *
  * Displays the slot metadata.
@@ -165,7 +126,7 @@ int
 main (int argc, char * const argv[])
 {
 	int c, which, fd;
-	int reset_bootdev;
+	bool reset_bootdev;
 	int curslot;
 	unsigned int selected_slot = 0;
 	int result = 1;
@@ -287,10 +248,10 @@ main (int argc, char * const argv[])
 	}
 
 	if (readonly) {
-		reset_bootdev = 0;
+		reset_bootdev = false;
 		fd = open(bootdev, O_RDONLY);
 	} else {
-		reset_bootdev = set_bootdev_writeable_status(bootdev, 1);
+		reset_bootdev = set_bootdev_writeable_status(bootdev, true);
 		fd = open(bootdev, O_RDWR);
 	}
 	if (fd < 0) {
@@ -371,7 +332,7 @@ main (int argc, char * const argv[])
 		close(fd);
 	}
 	if (reset_bootdev)
-		set_bootdev_writeable_status(bootdev, 0);
+		set_bootdev_writeable_status(bootdev, false);
 
 	gpt_finish(gptctx);
 

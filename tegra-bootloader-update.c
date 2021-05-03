@@ -303,6 +303,7 @@ static const char *redundant_part_format(const char *partname)
  *
  * bootfd: file descriptor for boot device
  * curbct: pointer to buffer holding current BCT partition, previously read
+ *         (NULL if initializing)
  * newbct: pointer to new BCT to write (maybe)
  * ent:    pointer to entry from the update payload
  *
@@ -322,11 +323,13 @@ update_bct (int bootfd, void *curbct, void *newbct, struct update_entry_s *ent)
 		fprintf(stderr, "Internal error: incorrect BCT update function for t210\n");
 		return -1;
 	}
-	if ((soctype == TEGRA_SOCTYPE_186 && !bct_update_valid_t18x(curbct, newbct)) ||
-	    (soctype == TEGRA_SOCTYPE_194 && !bct_update_valid_t19x(curbct, newbct))) {
-		printf("[FAIL]\n");
-		fprintf(stderr, "Error: validation check failed for BCT update\n");
-		return -1;
+	if (curbct != NULL) {
+		if ((soctype == TEGRA_SOCTYPE_186 && !bct_update_valid_t18x(curbct, newbct)) ||
+		    (soctype == TEGRA_SOCTYPE_194 && !bct_update_valid_t19x(curbct, newbct))) {
+			printf("[FAIL]\n");
+			fprintf(stderr, "Error: validation check failed for BCT update\n");
+			return -1;
+		}
 	}
 
 	bctslotsize = page_size * ((ent->length + (page_size-1)) / page_size);
@@ -344,7 +347,7 @@ update_bct (int bootfd, void *curbct, void *newbct, struct update_entry_s *ent)
 				offset = 0;
 				break;
 		}
-		if (memcmp(newbct, (uint8_t *)curbct + offset, ent->length) == 0)
+		if (curbct != NULL && memcmp(newbct, (uint8_t *)curbct + offset, ent->length) == 0)
 			printf("[offset=%lu,no update needed]...", (unsigned long) offset);
 		else {
 			printf("[offset=%lu]...", (unsigned long) offset);
@@ -391,6 +394,7 @@ update_bct (int bootfd, void *curbct, void *newbct, struct update_entry_s *ent)
  *
  * bootfd: file descriptor for boot device
  * curbct: pointer to buffer holding current BCT partition, previously read
+ *         (NULL if initializing)
  * newbct: pointer to new BCT to write (maybe)
  * ent:    pointer to entry from the update payload
  * which:  pointer to BCT update context, see above
@@ -419,7 +423,7 @@ update_bct_t210 (int bootfd, void *curbct, void *newbct, struct update_entry_s *
 		fprintf(stderr, "Internal error: no BCT selection context for t210 update\n");
 		return -1;
 	}
-	if (!bct_update_valid_t21x(curbct, newbct, &block_size, &page_size)) {
+	if (curbct != NULL && !bct_update_valid_t21x(curbct, newbct, &block_size, &page_size)) {
 		printf("[FAIL]\n");
 		fprintf(stderr, "Error: validation check failed for BCT update\n");
 		return -1;
@@ -462,7 +466,7 @@ update_bct_t210 (int bootfd, void *curbct, void *newbct, struct update_entry_s *
 		else
 			sprintf(bctname, "BCT-%u", bctidx);
 
-		if (memcmp(newbct, (uint8_t *)curbct + offset, ent->length) == 0) {
+		if (curbct != NULL && memcmp(newbct, (uint8_t *)curbct + offset, ent->length) == 0) {
 			printf("%s%s: [no update needed]\n", prefix, bctname);
 			continue;
 		}
@@ -505,13 +509,15 @@ update_bct_t210 (int bootfd, void *curbct, void *newbct, struct update_entry_s *
  * gptfd:  file descriptor for second boot (aka "GPT") device
  * ent: pointer to entry from update payload
  * is_bct: 1 if this is a BCT update, 0 otherwise
+ * initialize: non-zero if initializing, 0 otherwise
  * bctctx: 'which' context for BCT updates (for t210 platforms)
  *
  * Returns: 0 on success, -1 on error (errno not set)
  *
  */
 static int
-maybe_update_bootpart (int bootfd, int gptfd, struct update_entry_s *ent, int is_bct, int *bctctx)
+maybe_update_bootpart (int bootfd, int gptfd, struct update_entry_s *ent,
+		       int is_bct, int initialize, int *bctctx)
 {
 	int fd;
 	size_t partsize = (ent->part->last_lba - ent->part->first_lba + 1) * 512;
@@ -533,17 +539,17 @@ maybe_update_bootpart (int bootfd, int gptfd, struct update_entry_s *ent, int is
 		fd = gptfd;
 		offset -= bootdev_size;
 	}
-	if (read_completely_at(fd, slotbuf, partsize, offset) < 0) {
+	if (!initialize && read_completely_at(fd, slotbuf, partsize, offset) < 0) {
 		printf("[FAIL]\n");
 		perror(ent->partname);
 		return -1;
 	}
 	if (is_bct)
 		return (soctype == TEGRA_SOCTYPE_210
-			? update_bct_t210(bootfd, slotbuf, contentbuf, ent, bctctx)
-			: update_bct(bootfd, slotbuf, contentbuf, ent));
+			? update_bct_t210(bootfd, (initialize ? NULL : slotbuf), contentbuf, ent, bctctx)
+			: update_bct(bootfd, (initialize ? NULL : slotbuf), contentbuf, ent));
 
-	if (memcmp(contentbuf, slotbuf, ent->length) == 0) {
+	if (!initialize && memcmp(contentbuf, slotbuf, ent->length) == 0) {
 		printf("[no update needed]\n");
 		return 0;
 	}
@@ -570,13 +576,15 @@ maybe_update_bootpart (int bootfd, int gptfd, struct update_entry_s *ent, int is
  * gptfd:  file descriptor for the "GPT" device
  * ent:    pointer to update payload entry to process
  * dryrun: non-zero for a dry run (no writes)
+ * initialize: non-zero if initializing (skip BCT comparison check)
  * bctctx: pointer to 'which' contenxt for t210 BCT updates
  *
  * Returns: 0 on success, -1 on error (errno not set)
  *
  */
 static int
-process_entry (bup_context_t *bupctx, int bootfd, int gptfd, struct update_entry_s *ent, int dryrun, int *bctctx)
+process_entry (bup_context_t *bupctx, int bootfd, int gptfd, struct update_entry_s *ent,
+	       int dryrun, int initialize, int *bctctx)
 {
 	ssize_t total, n;
 	unsigned int erase_size;
@@ -603,7 +611,7 @@ process_entry (bup_context_t *bupctx, int bootfd, int gptfd, struct update_entry
 		return 0;
 	}
 	if (ent->part != NULL)
-		return maybe_update_bootpart(bootfd, gptfd, ent, strcmp(ent->partname, "BCT") == 0, bctctx);
+		return maybe_update_bootpart(bootfd, gptfd, ent, strcmp(ent->partname, "BCT") == 0, initialize, bctctx);
 
 	fd = open(ent->devname, O_RDWR);
 	if (fd < 0) {
@@ -611,15 +619,17 @@ process_entry (bup_context_t *bupctx, int bootfd, int gptfd, struct update_entry
 		perror(ent->devname);
 		return -1;
 	}
-	if (read_completely_at(fd, slotbuf, ent->length, 0) < 0) {
-		printf("[FAIL]\n");
-		perror(ent->devname);
-		return -1;
-	}
-	if (memcmp(contentbuf, slotbuf, ent->length) == 0) {
-		printf("[no update needed]\n");
-		close(fd);
-		return 0;
+	if (!initialize) {
+		if (read_completely_at(fd, slotbuf, ent->length, 0) < 0) {
+			printf("[FAIL]\n");
+			perror(ent->devname);
+			return -1;
+		}
+		if (memcmp(contentbuf, slotbuf, ent->length) == 0) {
+			printf("[no update needed]\n");
+			close(fd);
+			return 0;
+		}
 	}
 	erase_size = 512 * ((ent->length + 511) / 512);
 	if (write_completely_at(fd, contentbuf, ent->length, 0, erase_size) < 0) {
@@ -1050,10 +1060,10 @@ error_depart:
 int
 main (int argc, char * const argv[])
 {
-	int c, which, fd = -1, gptfd, err;
+	int c, which, fd = -1, gptfd = -1, err;
 	int reset_bootdev = 0, reset_gptdev = 0;
-	gpt_context_t *gptctx;
-	bup_context_t *bupctx;
+	gpt_context_t *gptctx = NULL;
+	bup_context_t *bupctx = NULL;
 	smd_context_t *smdctx = NULL;
 	struct update_entry_s updent;
 	void *bupiter;
@@ -1186,25 +1196,6 @@ main (int argc, char * const argv[])
 		return 1;
 	}
 
-	gptctx = gpt_init(bup_gpt_device(bupctx), 512);
-	if (gptctx == NULL) {
-		perror("boot sector GPT");
-		bup_finish(bupctx);
-		return 1;
-	}
-
-	if (soctype == TEGRA_SOCTYPE_210)
-		err = gpt_load_from_config(gptctx);
-	else
-		err = gpt_load(gptctx, GPT_LOAD_BACKUP_ONLY|GPT_NVIDIA_SPECIAL);
-
-	if (err != 0) {
-		fprintf(stderr, "Error: cannot load boot sector partition table\n");
-		gpt_finish(gptctx);
-		bup_finish(bupctx);
-		return 1;
-	}
-
 	if (spiboot_platform)
 		gptfd = -1;
 	else {
@@ -1230,6 +1221,32 @@ main (int argc, char * const argv[])
 		perror(bootdev);
 		goto reset_and_depart;
 	}
+
+	gptctx = gpt_init(bup_gpt_device(bupctx), 512, (initialize && !dryrun) ? GPT_INIT_FOR_WRITING : 0);
+	if (gptctx == NULL) {
+		perror("boot sector GPT");
+		goto reset_and_depart;
+	}
+
+	if (initialize)
+		err = gpt_load_from_config(gptctx);
+	else
+		err = gpt_load(gptctx, GPT_BACKUP_ONLY|GPT_NVIDIA_SPECIAL);
+
+	if (err != 0) {
+		fprintf(stderr, "Error: cannot load boot sector partition table\n");
+		goto reset_and_depart;
+		return 1;
+	}
+
+	if (initialize && !dryrun && soctype != TEGRA_SOCTYPE_210) {
+		err = gpt_save(gptctx, GPT_BACKUP_ONLY|GPT_NVIDIA_SPECIAL);
+		if (err != 0) {
+			fprintf(stderr, "Error: could not initialize boot sector partition table\n");
+			goto reset_and_depart;
+		}
+	}
+
 	bootdev_end_offset = lseek(fd, 0, SEEK_END);
 	if (bootdev_end_offset == (off_t) -1) {
 		perror(bootdev);
@@ -1240,20 +1257,21 @@ main (int argc, char * const argv[])
 
 	if (soctype == TEGRA_SOCTYPE_210)
 		smdctx = NULL;
-	else {
+	else if (initialize) {
+		smdctx = smd_new(REDUNDANCY_FULL);
+		if (smdctx == NULL) {
+			perror("initializing slot metadata");
+			goto reset_and_depart;
+		}
+	} else {
 		smdctx = smd_init(gptctx, fd);
 		if (smdctx == NULL) {
-			if (initialize) {
-				smdctx = smd_new(REDUNDANCY_FULL);
-				if (smdctx == NULL)
-					perror("initializing slot metadata");
-			} else
-				perror("loading slot metadata");
-			if (smdctx == NULL) {
-				goto reset_and_depart;
-			}
+			perror("loading slot metadata");
+			goto reset_and_depart;
 		}
+	}
 
+	if (smdctx) {
 		if (!slot_specified && smd_redundancy_level(smdctx) != REDUNDANCY_FULL) {
 			if (dryrun)
 				printf("[skip] enable redundancy in slot metadata\n");
@@ -1428,18 +1446,18 @@ main (int argc, char * const argv[])
 		if (redundant_entry_count == 0)
 			goto reset_and_depart;
 		for (i = 0; i < redundant_entry_count; i++)
-			if (process_entry(bupctx, fd, gptfd, ordered_entries[i], dryrun, &bctctx) != 0)
+			if (process_entry(bupctx, fd, gptfd, ordered_entries[i], dryrun, initialize, &bctctx) != 0)
 				goto reset_and_depart;
 	} else {
 		order_entries(redundant_entries, ordered_entries, redundant_entry_count);
 
 		for (i = 0; i < redundant_entry_count; i++)
-			if (process_entry(bupctx, fd, gptfd, ordered_entries[i], dryrun, NULL) != 0)
+			if (process_entry(bupctx, fd, gptfd, ordered_entries[i], dryrun, initialize, NULL) != 0)
 				goto reset_and_depart;
 
 		if (initialize) {
 			for (i = 0; i < nonredundant_entry_count; i++)
-				if (process_entry(bupctx, fd, gptfd, &nonredundant_entries[i], dryrun, NULL) != 0)
+				if (process_entry(bupctx, fd, gptfd, &nonredundant_entries[i], dryrun, initialize, NULL) != 0)
 					goto reset_and_depart;
 		} else if (bct_updated) {
 			/*
@@ -1449,7 +1467,7 @@ main (int argc, char * const argv[])
 				fprintf(stderr, "Error: could not update alternate mb1 partition\n");
 				goto reset_and_depart;
 			}
-			if (process_entry(bupctx, fd, gptfd, &mb1_other, dryrun, NULL) != 0)
+			if (process_entry(bupctx, fd, gptfd, &mb1_other, dryrun, initialize, NULL) != 0)
 				goto reset_and_depart;
 		}
 		if (!slot_specified) {
@@ -1496,8 +1514,10 @@ main (int argc, char * const argv[])
 	if (zerobuf)
 		free(zerobuf);
 
-	gpt_finish(gptctx);
-	bup_finish(bupctx);
+	if (gptctx)
+		gpt_finish(gptctx);
+	if (bupctx)
+		bup_finish(bupctx);
 
 	return ret;
 

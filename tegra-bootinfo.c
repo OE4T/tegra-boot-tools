@@ -866,12 +866,12 @@ mark_nv_boot_successful (void)
 		perror("smd_get_current_slot");
 		return ret;
 	}
-	gptctx = gpt_init(gptdev, 512);
+	gptctx = gpt_init(gptdev, 512, 0);
 	if (gptctx == NULL) {
 		perror("gpt_init");
 		return ret;
 	}
-	if (gpt_load(gptctx, GPT_LOAD_BACKUP_ONLY|GPT_NVIDIA_SPECIAL)) {
+	if (gpt_load(gptctx, GPT_BACKUP_ONLY|GPT_NVIDIA_SPECIAL)) {
 		perror("gpt_load");
 		gpt_finish(gptctx);
 		return ret;

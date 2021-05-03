@@ -1,5 +1,5 @@
-#ifndef ver_h__
-#define ver_h__
+#ifndef ver_h_included
+#define ver_h_included
 /* Copyright (c) 2020, Matthew Madison */
 
 #include <time.h>
@@ -31,4 +31,4 @@ static inline __attribute__((unused)) unsigned int make_bsp_version(unsigned int
 
 int ver_extract_info (void *buf, size_t bufsiz, ver_info_t *ver);
 
-#endif /* ver_h__ */
+#endif /* ver_h_included */

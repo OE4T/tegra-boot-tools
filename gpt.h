@@ -1,5 +1,5 @@
-#ifndef gpt_h__
-#define gpt_h__
+#ifndef gpt_h_included
+#define gpt_h_included
 /* Copyright (c) 2019, Matthew Madison */
 
 #include <stdint.h>
@@ -34,4 +34,4 @@ int gpt_save(gpt_context_t *ctx, unsigned int flags);
 gpt_entry_t *gpt_find_by_name(gpt_context_t *ctx, const char *name);
 gpt_entry_t *gpt_enumerate_partitions(gpt_context_t *ctx, void **iterctx);
 
-#endif /* gpt_h__ */
+#endif /* gpt_h_included */

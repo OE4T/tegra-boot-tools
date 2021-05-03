@@ -1,5 +1,5 @@
-#ifndef bup_h__
-#define bup_h__
+#ifndef bup_h_included
+#define bup_h_included
 /* Copyright (c) 2019-2020, Matthew Madison */
 
 #include <sys/types.h>
@@ -23,4 +23,4 @@ int bup_find_missing_entries(bup_context_t *ctx, const char **missing_parts,
 off_t bup_setpos(bup_context_t *ctx, off_t offset);
 ssize_t bup_read (bup_context_t *ctx, void *buf, size_t bufsize);
 
-#endif /* bup_h__ */
+#endif /* bup_h_included */

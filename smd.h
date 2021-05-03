@@ -1,5 +1,5 @@
-#ifndef smd_h__
-#define smd_h__
+#ifndef smd_h_included
+#define smd_h_included
 /* Copyright (c) 2020, Matthew Madison */
 
 #include <stdbool.h>
@@ -33,4 +33,4 @@ int smd_slot_mark_active(smd_context_t *ctx, unsigned int which);
 int smd_get_current_slot(void);
 int smd_update(smd_context_t *ctx, gpt_context_t *boot_gpt, int bootfd, bool force);
 
-#endif /* smd_h__ */
+#endif /* smd_h_included */

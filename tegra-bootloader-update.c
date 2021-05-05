@@ -356,8 +356,8 @@ update_bct (int bootfd, void *curbct, void *newbct, struct update_entry_s *ent)
 static int
 update_bct_t210 (int bootfd, void *curbct, void *newbct, struct update_entry_s *ent, int *which)
 {
-	unsigned int block_size = 16384;
-	unsigned int page_size = 512;
+	unsigned int block_size = (spiboot_platform ? 32768 : 16384);
+	unsigned int page_size = (spiboot_platform ? 2048 : 512);
 	unsigned int bctcopies = (spiboot_platform ? 2 : 1);
 	unsigned int bctpartsize;
 	int bctcount, bctstart, bctend, bctidx;

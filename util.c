@@ -11,6 +11,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <ctype.h>
 #include "util.h"
 
 #define MAX_PARTITIONS 256
@@ -94,8 +95,11 @@ partition_should_be_present (const char *partname)
 		FILE *fp = fopen(allpartconf, "r");
 		if (fp != NULL) {
 			char *name, *saveptr = NULL;
-			fread(partconf_buf, sizeof(partconf_buf[0]), sizeof(partconf_buf)/sizeof(partconf_buf[0]), fp);
+			size_t count = fread(partconf_buf, sizeof(partconf_buf[0]), sizeof(partconf_buf)/sizeof(partconf_buf[0])-1, fp);
 			fclose(fp);
+			while (count > 0 && isspace(partconf_buf[count-1]))
+				count -= 1;
+			partconf_buf[count] = '\0';
 			for (name = strtok_r(partconf_buf, ",", &saveptr);
 			     name != NULL && partcount < MAX_PARTITIONS;
 			     name = strtok_r(NULL, ",", &saveptr))
@@ -108,7 +112,7 @@ partition_should_be_present (const char *partname)
 	if (partcount == 0)
 		return true;
 	for (i = 0; i < partcount; i++)
-		if (strcmp(partname, partconf_list[i]))
+		if (strcmp(partname, partconf_list[i]) == 0)
 			return true;
 	return false;
 

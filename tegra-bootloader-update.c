@@ -1334,8 +1334,11 @@ main (int argc, char * const argv[])
 			int redundant;
 			sprintf(pathname, "/dev/disk/by-partlabel/%s", partname);
 			if (access(pathname, F_OK|W_OK) != 0) {
-				fprintf(stderr, "Error: cannot locate partition: %s\n", partname);
-				goto reset_and_depart;
+				if (partition_should_be_present(partname)) {
+					fprintf(stderr, "Error: cannot locate partition: %s\n", partname);
+					goto reset_and_depart;
+				} else
+					continue;
 			}
 			strcpy(pathname_b, "/dev/disk/by-partlabel/");
 			sprintf(pathname_b + strlen(pathname_b), redundant_part_format(partname), partname);

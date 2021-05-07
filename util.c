@@ -13,6 +13,15 @@
 #include <fcntl.h>
 #include "util.h"
 
+#define MAX_PARTITIONS 256
+static bool partconf_read;
+static char partconf_buf[4096];
+static char *partconf_list[MAX_PARTITIONS];
+static unsigned int partcount;
+#define QUOTE(m_) #m_
+#define XQUOTE(m_) QUOTE(m_)
+static const char allpartconf[] = XQUOTE(CONFIGPATH) "/all-partitions.conf";
+
 /*
  * set_bootdev_writeable_status
  *
@@ -61,3 +70,46 @@ set_bootdev_writeable_status (const char *bootdev, bool make_writeable)
 	return make_writeable != is_writeable;
 
 } /* set_bootdev_writeable_status */
+
+/*
+ * partition_should_be_present
+ *
+ * Given a partition name, checks the list of partitions in
+ * /usr/share/tegra-boot-tools/all-partitions.conf to see
+ * if it should be present. If that file does not exist,
+ * this function will default to assuming all partitions
+ * asked about should be present.
+ *
+ * partname: partition name
+ *
+ * Returns true if either no config file or if partname is
+ * on the list, false otherwise.
+ */
+bool
+partition_should_be_present (const char *partname)
+{
+	unsigned int i;
+
+	if (!partconf_read) {
+		FILE *fp = fopen(allpartconf, "r");
+		if (fp != NULL) {
+			char *name, *saveptr = NULL;
+			fread(partconf_buf, sizeof(partconf_buf[0]), sizeof(partconf_buf)/sizeof(partconf_buf[0]), fp);
+			fclose(fp);
+			for (name = strtok_r(partconf_buf, ",", &saveptr);
+			     name != NULL && partcount < MAX_PARTITIONS;
+			     name = strtok_r(NULL, ",", &saveptr))
+				partconf_list[partcount++] = name;
+		} else
+			fprintf(stderr, "Warning: could not open %s\n", allpartconf);
+		partconf_read = true;
+	}
+
+	if (partcount == 0)
+		return true;
+	for (i = 0; i < partcount; i++)
+		if (strcmp(partname, partconf_list[i]))
+			return true;
+	return false;
+
+} /* partition_should_be_present */

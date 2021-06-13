@@ -494,7 +494,7 @@ maybe_update_bootpart (int bootfd, int gptfd, struct update_entry_s *ent,
 		fd = gptfd;
 		offset -= bootdev_size;
 	}
-	if (!initialize && read_completely_at(fd, slotbuf, partsize, offset) < 0) {
+	if (read_completely_at(fd, slotbuf, partsize, offset) < 0) {
 		printf("[FAIL]\n");
 		perror(ent->partname);
 		return -1;
@@ -504,7 +504,7 @@ maybe_update_bootpart (int bootfd, int gptfd, struct update_entry_s *ent,
 			? update_bct_t210(bootfd, (initialize ? NULL : slotbuf), contentbuf, ent, bctctx)
 			: update_bct(bootfd, (initialize ? NULL : slotbuf), contentbuf, ent));
 
-	if (!initialize && memcmp(contentbuf, slotbuf, ent->length) == 0) {
+	if (memcmp(contentbuf, slotbuf, ent->length) == 0) {
 		printf("[no update needed]\n");
 		return 0;
 	}
@@ -573,18 +573,6 @@ process_entry (bup_context_t *bupctx, int bootfd, int gptfd, struct update_entry
 		printf("[FAIL]\n");
 		perror(ent->devname);
 		return -1;
-	}
-	if (!initialize) {
-		if (read_completely_at(fd, slotbuf, ent->length, 0) < 0) {
-			printf("[FAIL]\n");
-			perror(ent->devname);
-			return -1;
-		}
-		if (memcmp(contentbuf, slotbuf, ent->length) == 0) {
-			printf("[no update needed]\n");
-			close(fd);
-			return 0;
-		}
 	}
 	erase_size = 512 * ((ent->length + 511) / 512);
 	if (write_completely_at(fd, contentbuf, ent->length, 0, erase_size) < 0) {

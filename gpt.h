@@ -29,6 +29,7 @@ int gpt_fd(gpt_context_t *ctx);
 
 int gpt_load(gpt_context_t *ctx, unsigned int flags);
 int gpt_load_from_config(gpt_context_t *ctx);
+int gpt_layout_config_match(gpt_context_t *ctx);
 int gpt_save(gpt_context_t *ctx, unsigned int flags);
 
 gpt_entry_t *gpt_find_by_name(gpt_context_t *ctx, const char *name);

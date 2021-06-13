@@ -26,7 +26,8 @@
 #define QUOTE(m_) #m_
 #define XQUOTE(m_) QUOTE(m_)
 static const char bootpartconf[] = XQUOTE(CONFIGPATH) "/boot-partitions.conf";
-#define MAX_CONFIG_ENTRIES 64U
+// This should be 128 to match the standard GPT size
+#define MAX_CONFIG_ENTRIES 128U
 
 /*
  * On-device structures for a GUID partition table.
@@ -69,7 +70,7 @@ struct gpt_context_s {
 	bool primary_valid, backup_valid;
 	struct gpt_header_s primary_header;
 	struct gpt_header_s backup_header;
-	unsigned int entry_count;
+	unsigned int entry_count, entries_used;
 	struct gpt_entry_s *entries;
 };
 
@@ -78,6 +79,8 @@ static const uint8_t default_type_guid[16] = {0xa2, 0xa0, 0xd0, 0xeb,
 					      0xe5, 0xb9,
 					      0x33, 0x44,
 					      0x87, 0xc0, 0x68, 0xb6, 0xb7, 0x26, 0x99, 0xc7};
+// All zeros == unused
+static const uint8_t unused_type_guid[16] = { 0 };
 
 /*
  * parse_header
@@ -340,12 +343,15 @@ gpt_load (gpt_context_t *ctx, unsigned int flags)
 	if (hdr->entries_crc32 != crc32(0, ctx->buffer, hdr->entry_size * hdr->entry_count))
 		return -1;
 	ctx->entry_count = hdr->entry_count;
-	ctx->entries = malloc(sizeof(struct gpt_entry_s) * hdr->entry_count);
+	ctx->entries = calloc(hdr->entry_count, sizeof(struct gpt_entry_s));
 	if (ctx->entries == NULL)
 		return -1;
+	ctx->entries_used = 0;
 	for (ent = ctx->buffer, destent = ctx->entries, i = 0; i < ctx->entry_count; ent += 1, destent += 1, i += 1) {
 		int j;
 		memcpy(destent->type_guid, ent->type_guid, sizeof(destent->type_guid));
+		if (memcmp(destent->type_guid, unused_type_guid, sizeof(destent->type_guid)) != 0)
+			ctx->entries_used += 1;
 		memcpy(destent->part_guid, ent->part_guid, sizeof(destent->part_guid));
 		destent->first_lba = le64toh(ent->first_lba);
 		destent->last_lba = le64toh(ent->last_lba);
@@ -544,6 +550,71 @@ gpt_fd (gpt_context_t *ctx)
 } /* gpt_fd */
 
 /*
+ * gpt_entries_from_config
+ *
+ * The guts of gpt_load_from_config, separately callable to allow
+ * for comparing with an existing GPT.
+ *
+ * blocksize: unsigned int with block size in bytes
+ * entries: pointer to pointer where GPT entries will be stored
+ * entuseptr: pointer to unsigned int to hold entries used
+ *
+ * Returns: 0 on success, -1 on error (errno may not be set)
+ */
+static int
+gpt_entries_from_config (unsigned int blocksize, struct gpt_entry_s **entriesptr, unsigned int *entuseptr)
+{
+	FILE *fp;
+	struct gpt_entry_s *destent, *entries;
+	char linebuf[256], *cp, *anchor;
+	unsigned long val;
+	unsigned int i;
+
+	fp = fopen(bootpartconf, "r");
+	if (fp == NULL)
+		return -1;
+	entries = calloc(MAX_CONFIG_ENTRIES, sizeof(struct gpt_entry_s));
+	if (entries == NULL) {
+		fclose(fp);
+		return -1;
+	}
+	for (i = 0; i < MAX_CONFIG_ENTRIES && fgets(linebuf, sizeof(linebuf), fp) != NULL; i++) {
+		destent = &entries[i];
+		anchor = linebuf;
+		cp = strchr(anchor, ':');
+		if (cp == NULL || cp - anchor >= sizeof(destent->part_name))
+			goto parse_error;
+		memcpy(destent->part_name, anchor, cp-anchor);
+		anchor = cp + 1;
+		cp = strchr(anchor, ':');
+		if (cp == NULL)
+			goto parse_error;
+		*cp = '\0';
+		val = strtoul(anchor, NULL, 10);
+		if (val == ULONG_MAX || val % blocksize != 0)
+			goto parse_error;
+		destent->first_lba = val / blocksize;
+		anchor = cp + 1;
+		val = strtoul(anchor, NULL, 10);
+		if (val == ULONG_MAX || val == 0 || val % blocksize != 0)
+			goto parse_error;
+		destent->last_lba = destent->first_lba + (val / blocksize) - 1U;
+		memcpy(destent->type_guid, default_type_guid, sizeof(destent->type_guid));
+		uuid_generate_random((void *) (destent->part_guid));
+	}
+	*entuseptr = i;
+	*entriesptr = entries;
+	fclose(fp);
+	return 0;
+parse_error:
+	free(entries);
+	fclose(fp);
+	errno = EINVAL;
+	return -1;
+
+} /* gpt_entries_from_config */
+
+/*
  * gpt_load_from_config
  *
  * Alternative to gpt_load() that parses a partition
@@ -566,55 +637,77 @@ gpt_fd (gpt_context_t *ctx)
 int
 gpt_load_from_config (gpt_context_t *ctx)
 {
-	FILE *fp;
-	struct gpt_entry_s *destent;
-	char linebuf[256], *cp, *anchor;
-	unsigned long val;
-	unsigned int i;
-
 	if (ctx == NULL)
 		return -1;
 
-	fp = fopen(bootpartconf, "r");
-	if (fp == NULL)
-		return -1;
-	ctx->entries = calloc(MAX_CONFIG_ENTRIES, sizeof(struct gpt_entry_s));
-	if (ctx->entries == NULL) {
-		fclose(fp);
-		return -1;
-	}
-	for (i = 0; i < MAX_CONFIG_ENTRIES && fgets(linebuf, sizeof(linebuf), fp) != NULL; i++) {
-		destent = &ctx->entries[i];
-		anchor = linebuf;
-		cp = strchr(anchor, ':');
-		if (cp == NULL || cp - anchor >= sizeof(destent->part_name))
-			goto parse_error;
-		memcpy(destent->part_name, anchor, cp-anchor);
-		anchor = cp + 1;
-		cp = strchr(anchor, ':');
-		if (cp == NULL)
-			goto parse_error;
-		*cp = '\0';
-		val = strtoul(anchor, NULL, 10);
-		if (val == ULONG_MAX || val % ctx->blocksize != 0)
-			goto parse_error;
-		destent->first_lba = val / ctx->blocksize;
-		anchor = cp + 1;
-		val = strtoul(anchor, NULL, 10);
-		if (val == ULONG_MAX || val == 0 || val % ctx->blocksize != 0)
-			goto parse_error;
-		destent->last_lba = destent->first_lba + (val / ctx->blocksize) - 1U;
-		memcpy(destent->type_guid, default_type_guid, sizeof(destent->type_guid));
-		uuid_generate_random((void *) (destent->part_guid));
-	}
-	ctx->entry_count = i;
-	fclose(fp);
-	return 0;
-parse_error:
-	free(ctx->entries);
-	ctx->entries = NULL;
-	fclose(fp);
-	errno = EINVAL;
-	return -1;
+	ctx->entry_count = MAX_CONFIG_ENTRIES;
+	return gpt_entries_from_config(ctx->blocksize, &ctx->entries, &ctx->entries_used);
 
 } /* gpt_load_from_config */
+
+/*
+ * gpt_layout_config_match
+ *
+ * Checks if the current GPT matches the configuration file, where
+ * 'match' means:
+ *    - same number of partitions
+ *    - names are the same
+ *    - start and end LBAs match for each partition
+ *  (i.e., the type, GUID, flags are ignored).
+ * You should call gpt_load() before calling this function.
+ *
+ * ctx: context pointer
+ *
+ * Returns: 0 on success
+ *          1 if successfully performed comparision with a mismatch
+ *        < 0 on some kind of error (errno not necessarily set)
+ */
+int
+gpt_layout_config_match (gpt_context_t *ctx)
+{
+	struct gpt_entry_s *cfg_entries, *ent;
+	unsigned int cfg_entries_used, i;
+	bool found[MAX_CONFIG_ENTRIES];
+	bool mismatch = false;
+
+	if (ctx == NULL)
+		return -1;
+	if (gpt_entries_from_config(ctx->blocksize, &cfg_entries, &cfg_entries_used) < 0)
+		return -1;
+	if (cfg_entries_used != ctx->entries_used) {
+		fprintf(stderr, "Mismatch: config entry count %u, actual entry count %u\n",
+			cfg_entries_used, ctx->entry_count);
+		mismatch = true;
+		goto depart;
+	}
+	memset(found, 0, sizeof(bool)*cfg_entries_used);
+	for (i = 0; i < cfg_entries_used; i++) {
+		ent = gpt_find_by_name(ctx, cfg_entries[i].part_name);
+		if (ent != NULL) {
+			found[i] = true;
+			if (ent->first_lba != cfg_entries[i].first_lba ||
+			    ent->last_lba != cfg_entries[i].last_lba) {
+				fprintf(stderr, "Mismatch: partition %s LBAs %lu - %lu vs configured %lu - %lu\n",
+					ent->part_name, ent->first_lba, ent->last_lba,
+					cfg_entries[i].first_lba, cfg_entries[i].last_lba);
+				mismatch = true;
+				goto depart;
+			}
+		} else {
+			fprintf(stderr, "Mismatch: did not find partition %s\n", cfg_entries[i].part_name);
+			mismatch = true;
+			goto depart;
+		}
+	}
+	for (i = 0; i < cfg_entries_used; i++) {
+		if (!found[i]) {
+			fprintf(stderr, "Mismatch: partition %s not found\n", cfg_entries[i].part_name);
+			mismatch = true;
+			break;
+		}
+	}
+depart:
+	free(cfg_entries);
+	return mismatch ? 1 : 0;
+
+} /* gpt_layout_config_match */

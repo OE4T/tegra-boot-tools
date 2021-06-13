@@ -31,6 +31,7 @@ static struct option options[] = {
 	{ "initialize",		no_argument,		0, 'i' },
 	{ "slot-suffix",	required_argument,	0, 's' },
 	{ "dry-run",		no_argument,		0, 'n' },
+	{ "needs-repartition",	no_argument,		0, 'N' },
 	{ "help",		no_argument,		0, 'h' },
 	{ "version",		no_argument,		0, 0   },
 	{ 0,			0,			0, 0   }
@@ -41,6 +42,7 @@ static char *optarghelp[] = {
 	"--initialize         ",
 	"--slot-suffix        ",
 	"--dry-run            ",
+	"--needs-repartition  ",
 	"--help               ",
 	"--version            ",
 };
@@ -49,6 +51,7 @@ static char *opthelp[] = {
 	"initialize the entire set of boot partitions",
 	"update only the redundant boot partitions with the specified suffix (with no SMD update)",
 	"do not perform any writes, just show what would be written",
+	"check if boot device needs repartitioning (T186/T194 only)",
 	"display this help text",
 	"display version information"
 };
@@ -527,7 +530,7 @@ maybe_update_bootpart (int bootfd, int gptfd, struct update_entry_s *ent,
  * bootfd: file descriptor for the boot device
  * gptfd:  file descriptor for the "GPT" device
  * ent:    pointer to update payload entry to process
- * dryrun: non-zero for a dry run (no writes)
+ * dryrun: true for a dry run (no writes)
  * initialize: non-zero if initializing (skip BCT comparison check)
  * bctctx: pointer to 'which' contenxt for t210 BCT updates
  *
@@ -536,7 +539,7 @@ maybe_update_bootpart (int bootfd, int gptfd, struct update_entry_s *ent,
  */
 static int
 process_entry (bup_context_t *bupctx, int bootfd, int gptfd, struct update_entry_s *ent,
-	       int dryrun, int initialize, int *bctctx)
+	       bool dryrun, int initialize, int *bctctx)
 {
 	ssize_t total, n;
 	unsigned int erase_size;
@@ -1028,15 +1031,16 @@ main (int argc, char * const argv[])
 	unsigned int version;
 	char pathname[PATH_MAX];
 	int initialize = 0;
-	int dryrun = 0;
+	bool dryrun = false;
 	int ret = 1;
 	int missing_count;
 	int curslot = -1;
-	int slot_specified = 0;
+	bool slot_specified = false;
 	const char *missing[32];
 	struct update_entry_s *ordered_entries[MAX_ENTRIES], mb1_other;
 	unsigned int i;
 	off_t bootdev_end_offset;
+	bool check_only = false;
 
 	while ((c = getopt_long_only(argc, argv, shortopts, options, &which)) != -1) {
 		switch (c) {
@@ -1066,10 +1070,13 @@ main (int argc, char * const argv[])
 					print_usage();
 					return 1;
 				}
-				slot_specified = 1;
+				slot_specified = true;
 				break;
 			case 'n':
-				dryrun = 1;
+				dryrun = true;
+				break;
+			case 'N':
+				check_only = dryrun = true;
 				break;
 			case 0:
 				if (strcmp(options[which].name, "version") == 0) {
@@ -1084,7 +1091,7 @@ main (int argc, char * const argv[])
 		}
 	}
 
-	if (optind >= argc) {
+	if (optind >= argc && !check_only) {
 		fprintf(stderr, "Error: missing required argument\n");
 		print_usage();
 		return 1;
@@ -1180,6 +1187,29 @@ main (int argc, char * const argv[])
 		goto reset_and_depart;
 	}
 
+	if (check_only) {
+		if (soctype == TEGRA_SOCTYPE_210) {
+			/*
+			 * t210 platforms have no GPT in the boot device, --initialize will force rewrite anyway,
+			 * so just return > 0 to indicate a full erasure is not required.
+			 */
+			ret = 1;
+			goto reset_and_depart;
+		}
+		err = gpt_load(gptctx, GPT_BACKUP_ONLY|GPT_NVIDIA_SPECIAL);
+		if (err != 0) {
+			ret = 0;
+			goto reset_and_depart;
+		}
+		err = gpt_layout_config_match(gptctx);
+		if (err < 0) {
+			fprintf(stderr, "could not compare existing boot partition layout with configuration");
+			ret = 2;
+		} else
+			ret = (err == 0) ? 1 : 0;
+		goto reset_and_depart;
+	}
+
 	if (initialize)
 		err = gpt_load_from_config(gptctx);
 	else
@@ -1188,7 +1218,6 @@ main (int argc, char * const argv[])
 	if (err != 0) {
 		fprintf(stderr, "Error: cannot load boot sector partition table\n");
 		goto reset_and_depart;
-		return 1;
 	}
 
 	if (initialize && !dryrun && soctype != TEGRA_SOCTYPE_210) {

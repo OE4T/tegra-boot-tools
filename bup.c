@@ -48,6 +48,23 @@ struct bup_header_s {
 } __attribute__((packed));
 
 /*
+ * Starting with L4T R32.6.1, the version field in the
+ * header has the following structure:
+ *
+ *  Bits  0- 7: release version year (BCD)
+ *  Bits  8-12: release version month (BCD)
+ *  Bits 14-15: release revision in month
+ *  Bits 16-23: major version (BCD)
+ *  Bits 24-27: minor version (BCD)
+ *
+ */
+#define BUP_VERSION_MAJOR(v_)		(((v_) >> 16) & 0xFF)
+#define BUP_VERSION_MINOR(v_)		(((v_) >> 24) & 0x0F)
+#define BUP_VERSION_RELYEAR(v_)		(((v_) >>  0) & 0xFF)
+#define BUP_VERSION_RELMONTH(v_)	(((v_) >>  8) & 0x1F)
+#define BUP_VERSION_RELINMONTH(v_)	(((v_) >> 14) & 0x03)
+
+/*
  * BUP entries (in-payload format)
  */
 #define OP_MODE_COMMON		0
@@ -93,7 +110,8 @@ struct bup_context_s {
 };
 
 static const uint8_t bup_magic[16] = "NVIDIA__BLOB__V2";
-static const uint32_t bup_version = 0x00020000;
+static const unsigned int expected_major_version = 2;
+static const unsigned int max_minor_version = 1;
 static const char bootdev[] = OTABOOTDEV;
 static const char gptdev[] = OTAGPTDEV;
 #define QUOTE(m_) #m_
@@ -259,6 +277,68 @@ construct_tnspec (char *buf, size_t bufsiz)
 
 } /* construct_tnspec */
 
+static char *
+bcd_format (char *buf, uint16_t bcdval)
+{
+	char *bp;
+	bool saw_nonzero = false;
+	int i;
+
+	for (bp = buf, i = 3; i >= 0; i--) {
+		unsigned char v = (bcdval >> (i * 4)) & 0xf;
+		if (i == 0 || v != 0 || saw_nonzero) {
+			saw_nonzero = true;
+			*bp++ = (v > 9 ? '?' : '0' + v);
+		}
+	}
+	return bp;
+
+} /* bcd_format */
+
+/*
+ * bup_version_string
+ */
+static ssize_t
+bup_version_string (char *buf, size_t bufsize, unsigned int bupver)
+{
+	char *bp = buf;
+	char *bufend = buf + (bufsize - 1);
+	if (bp + 1 >= bufend)
+		goto depart;
+	bp = bcd_format(bp, BUP_VERSION_MAJOR(bupver));
+	if (bp >= bufend)
+		goto depart;
+	*bp++ = '.';
+	if (bp >= bufend)
+		goto depart;
+	bp = bcd_format(bp, BUP_VERSION_MINOR(bupver));
+	if (BUP_VERSION_RELYEAR(bupver) != 0) {
+		if (bp + 3 >= bufend)
+			goto depart;
+		*bp++ = '-';
+		*bp++ = '2';
+		*bp++ = '0';
+		if (bp + 1 >= bufend)
+			goto depart;
+		bp = bcd_format(bp, BUP_VERSION_RELYEAR(bupver));
+		if (bp >= bufend)
+			goto depart;
+		*bp++ = '.';
+		if (bp + 1 >= bufend)
+			goto depart;
+		bp = bcd_format(bp, BUP_VERSION_RELMONTH(bupver));
+		if (bp >= bufend)
+			goto depart;
+		*bp++ = '-';
+		if (bp >= bufend)
+			goto depart;
+		*bp++ = '0' + BUP_VERSION_RELINMONTH(bupver);
+	}
+depart:
+	*bp = '\0';
+	return bp - buf;
+}
+
 /*
  * free_context
  */
@@ -334,8 +414,11 @@ bup_init (const char *pathname)
 		free_context(ctx);
 		return NULL;
 	}
-	if (hdr->version != bup_version) {
-		fprintf(stderr, "%s: bad header version\n", pathname);
+	if (BUP_VERSION_MAJOR(hdr->version) != expected_major_version ||
+	    BUP_VERSION_MINOR(hdr->version) > max_minor_version) {
+		char verstr[64];
+		bup_version_string(verstr, sizeof(verstr), hdr->version);
+		fprintf(stderr, "%s: unsupported BUP version %s\n", pathname, verstr);
 		free_context(ctx);
 		return NULL;
 	}

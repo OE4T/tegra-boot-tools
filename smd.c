@@ -26,7 +26,14 @@ struct slot_info_s {
 } __attribute__((packed));
 
 #define SMD_VER_MIN 1U
-#define SMD_VER_MAX 4U
+#define SMD_VER_MAX 5U
+
+#define SMD_FLAG_RED_BL		(1<<0)
+#define SMD_FLAG_RED_USER	(1<<1)
+#define SMD_FLAG_RED_ROOTFS	(1<<2)
+#define SMD_FLAG_RED_UNIFIED	(1<<5)   // added in version 5
+#define SMD_FLAG_RED_FLAGS_V5 (SMD_FLAG_RED_BL|SMD_FLAG_RED_USER|SMD_FLAG_RED_ROOTFS|SMD_FLAG_RED_UNIFIED)
+#define SMD_FLAG_RED_FLAGS_PRE_V5 (SMD_FLAG_RED_BL|SMD_FLAG_RED_USER|SMD_FLAG_RED_ROOTFS)
 
 struct smd_s {
 	char magic[4];
@@ -246,17 +253,23 @@ smd_redundancy_level (smd_context_t *ctx)
 		return -1;
 	}
 
-	flags = ctx->smd_ods.smd.flags & 3;
+	flags = ctx->smd_ods.smd.flags;
+	if (ctx->smd_ods.smd.version < 5)
+		flags &= SMD_FLAG_RED_FLAGS_PRE_V5;
+	else
+		flags &= SMD_FLAG_RED_FLAGS_V5;
 	/*
 	 * The lowest bit of the flags is enable/disable
 	 * The next bit is "user" redundancy (which we call "full")
+	 * For SMD version 5+, NV uses 'unified' for BL+rootfs (our "full")
+	 * We don't support the rootfs-only redundancy, and will treat that as "full" also
 	 *
 	 * Extra check on the number slots here; should always be 2,
 	 * but if it's 1 (or 0?), then there's really no redundancy.
 	 */
-	if (flags == 0 || flags == 2 || ctx->smd_ods.smd.maxslots < 2)
+	if (flags == 0 || ctx->smd_ods.smd.maxslots < 2)
 		return REDUNDANCY_OFF;
-	if (flags == 1)
+	if (flags == SMD_FLAG_RED_BL)
 		return REDUNDANCY_BOOTLOADER_ONLY;
 	return REDUNDANCY_FULL;
 
@@ -284,7 +297,10 @@ smd_set_redundancy_level (smd_context_t *ctx, smd_redundancy_level_t level)
 
 	switch (level) {
 	case REDUNDANCY_OFF:
-		ctx->smd_ods.smd.flags &= ~3U;
+		if (ctx->smd_ods.smd.version < 5)
+			ctx->smd_ods.smd.flags &= ~SMD_FLAG_RED_FLAGS_PRE_V5;
+		else
+			ctx->smd_ods.smd.flags &= ~SMD_FLAG_RED_FLAGS_V5;
 		ctx->smd_ods.smd.maxslots = 1;
 		ctx->smd_ods.smd.slot_info[0].priority = 15;
 		ctx->smd_ods.smd.slot_info[0].retry_count = 7;
@@ -292,11 +308,14 @@ smd_set_redundancy_level (smd_context_t *ctx, smd_redundancy_level_t level)
 		memset(&ctx->smd_ods.smd.slot_info[1], 0, sizeof(ctx->smd_ods.smd.slot_info[1]));
 		break;
 	case REDUNDANCY_BOOTLOADER_ONLY:
-		ctx->smd_ods.smd.flags = (ctx->smd_ods.smd.flags & ~3U) | 1U;
+		ctx->smd_ods.smd.flags = SMD_FLAG_RED_BL;
 		/* Slot initialization happens below */
 		break;
 	case REDUNDANCY_FULL:
-		ctx->smd_ods.smd.flags |= 3;
+		if (ctx->smd_ods.smd.version < 5)
+			ctx->smd_ods.smd.flags |= (SMD_FLAG_RED_BL|SMD_FLAG_RED_USER);
+		else
+			ctx->smd_ods.smd.flags |= (SMD_FLAG_RED_BL|SMD_FLAG_RED_UNIFIED);
 		/* Slot initialization happens below */
 		break;
 	default:

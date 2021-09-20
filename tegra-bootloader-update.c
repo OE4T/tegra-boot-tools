@@ -699,17 +699,21 @@ order_entries_t210 (struct update_entry_s *orig, struct update_entry_s **ordered
 		return 0;
 	}
 	memset(used, 0, sizeof(used));
-	for (i = 0; i < update_list->count; i++) {
+	for (i = 0, retcount = 0; i < update_list->count; i++) {
 		ent = find_entry_by_name(orig, count, update_list->partnames[i]);
 		if (ent == NULL) {
-			fprintf(stderr, "Error: payload or partition not found for %s\n",
-				update_list->partnames[i]);
-			return 0;
+			/* EKS partitions are optional */
+			if (memcmp(update_list->partnames[i], "EKS", 3) == 0)
+				continue;
+			else {
+				fprintf(stderr, "Error: payload or partition not found for %s\n",
+					update_list->partnames[i]);
+				return 0;
+			}
 		}
-		ordered[i] = ent;
+		ordered[retcount++] = ent;
 		used[ent-orig] = true;
 	}
-	retcount = update_list->count;
 	for (i = 0; i < count; i++) {
 		if (!used[i])
 			ordered[retcount++] = &orig[i];

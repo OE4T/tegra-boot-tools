@@ -312,10 +312,9 @@ smd_set_redundancy_level (smd_context_t *ctx, smd_redundancy_level_t level)
 		/* Slot initialization happens below */
 		break;
 	case REDUNDANCY_FULL:
-		if (ctx->smd_ods.smd.version < 5)
-			ctx->smd_ods.smd.flags |= (SMD_FLAG_RED_BL|SMD_FLAG_RED_USER);
-		else
-			ctx->smd_ods.smd.flags |= (SMD_FLAG_RED_BL|SMD_FLAG_RED_UNIFIED);
+		ctx->smd_ods.smd.flags |= (SMD_FLAG_RED_BL|SMD_FLAG_RED_USER);
+		if (ctx->smd_ods.smd.version >= 5)
+			ctx->smd_ods.smd.flags |= SMD_FLAG_RED_UNIFIED;
 		/* Slot initialization happens below */
 		break;
 	default:
@@ -492,6 +491,20 @@ smd_slot_mark_active (smd_context_t *ctx, unsigned int which)
 	ctx->smd_ods.smd.slot_info[1-which].priority = 14;
 	s->retry_count = 7;
 	s->successful = 0;
+
+	/*
+	 * If we were installed using L4T R32.6.x and are downgrading to
+	 * an earlier version, which may be using just the UNIFIED flag
+	 * to indicate combined bl/rootfs redundancy, we must make sure
+	 * the USER redundancy flag is also set so the older cboot (which
+	 * doesn't understand the 'unified' redundancy introduced in R32.6.x)
+	 * knows we want full redundancy.
+	 */
+	if (ctx->smd_ods.smd.version >= 5 &&
+	    ((ctx->smd_ods.smd.flags & (SMD_FLAG_RED_USER|SMD_FLAG_RED_UNIFIED)) == SMD_FLAG_RED_UNIFIED)) {
+		ctx->needs_update = true;
+		ctx->smd_ods.smd.flags |= SMD_FLAG_RED_USER;
+	}
 
 	return 0;
 

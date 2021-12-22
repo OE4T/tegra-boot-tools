@@ -34,7 +34,7 @@ static struct option options[] = {
 	{ "version",		no_argument,		0, 0   },
 	{ 0,			0,			0, 0   }
 };
-static const char *shortopts = ":cdema:si:D:h";
+static const char *shortopts = ":cdema:sL:D:h";
 
 static char *optarghelp[] = {
 	"--current-slot       ",

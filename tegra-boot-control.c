@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <tegra-eeprom/cvm.h>
+#include <limits.h>
 #include "gpt.h"
 #include "smd.h"
 #include "util.h"
@@ -27,11 +28,13 @@ static struct option options[] = {
 	{ "mark-successful",	no_argument,		0, 'm' },
 	{ "set-active",		required_argument,	0, 'a' },
 	{ "status",		no_argument,		0, 's' },
+	{ "load",		required_argument,	0, 'L' },
+	{ "dump",		required_argument,	0, 'D' },
 	{ "help",		no_argument,		0, 'h' },
 	{ "version",		no_argument,		0, 0   },
 	{ 0,			0,			0, 0   }
 };
-static const char *shortopts = ":cdema:sh";
+static const char *shortopts = ":cdema:si:D:h";
 
 static char *optarghelp[] = {
 	"--current-slot       ",
@@ -40,6 +43,8 @@ static char *optarghelp[] = {
 	"--mark-successful    ",
 	"--set-active         ",
 	"--status             ",
+	"--load               ",
+	"--dump               ",
 	"--help               ",
 	"--version            ",
 };
@@ -51,6 +56,8 @@ static char *opthelp[] = {
 	"mark current boot slot successful",
 	"set active slot for next reboot",
 	"display redundancy and boot slot status",
+	"load slot metadata from file",
+	"dump slot metadata to file",
 	"display this help text",
 	"display version information"
 };
@@ -62,11 +69,14 @@ typedef enum {
 	ACTION_MARK_SUCCESS,
 	ACTION_SET_ACTIVE,
 	ACTION_STATUS,
+	ACTION_LOAD,
+	ACTION_DUMP,
 	ACTION_INVALID = 255,
 } bootctrl_action_t;
 
 static const char bootdev[] = OTABOOTDEV;
 static const char gptdev[] = OTAGPTDEV;
+static char slot_metadata_bin_file[PATH_MAX];
 
 static void
 print_usage (void)
@@ -125,7 +135,7 @@ print_smd_info (smd_context_t *smdctx, int curslot)
 int
 main (int argc, char * const argv[])
 {
-	int c, which, fd;
+	int c, which, fd, smd_fd;
 	bool reset_bootdev;
 	int curslot;
 	unsigned int selected_slot = 0;
@@ -189,6 +199,25 @@ main (int argc, char * const argv[])
 					action = ACTION_STATUS;
 					readonly = true;
 				}
+				break;
+			case 'L':
+				if (action != ACTION_INVALID)
+					option_error = true;
+				else
+					action = ACTION_LOAD;
+				strncpy(slot_metadata_bin_file, optarg, sizeof(slot_metadata_bin_file));
+				if (access(slot_metadata_bin_file, R_OK) != 0) {
+					fprintf(stderr, "Error: cannot access slot metadata file %s\n", slot_metadata_bin_file);
+					return 1;
+				}
+				break;
+			case 'D':
+				if (action != ACTION_INVALID)
+					option_error = true;
+				else
+					action = ACTION_DUMP;
+				strncpy(slot_metadata_bin_file, optarg, sizeof(slot_metadata_bin_file));
+				readonly = true;
 				break;
 			case 0:
 				if (strcmp(options[which].name, "version") == 0) {
@@ -259,7 +288,29 @@ main (int argc, char * const argv[])
 		goto reset_and_depart;
 	}
 
-	smdctx = smd_init(gptctx, fd);
+	if (action == ACTION_DUMP) {
+		smd_fd = creat(slot_metadata_bin_file, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+		if (smd_fd < 0) {
+			perror(slot_metadata_bin_file);
+			goto reset_and_depart;
+		}
+	}
+
+	if (action == ACTION_LOAD) {
+		smd_fd = open(slot_metadata_bin_file, O_RDONLY);
+		if (smd_fd < 0) {
+			perror(slot_metadata_bin_file);
+			goto reset_and_depart;
+		}
+		smdctx = smd_new_from_file(smd_fd);
+		if (!smdctx) {
+			perror("initializing slot metadata");
+			goto reset_and_depart;
+		}
+	} else {
+		smdctx = smd_init(gptctx, fd);
+	}
+
 	if (smdctx == NULL) {
 		if (action == ACTION_ENABLE || action == ACTION_DISABLE) {
 			smdctx = smd_new((action == ACTION_ENABLE ? REDUNDANCY_FULL : REDUNDANCY_OFF));
@@ -311,6 +362,12 @@ main (int argc, char * const argv[])
 			else
 				result = print_smd_info(smdctx, curslot);
 			break;
+		case ACTION_LOAD:
+			result = print_smd_info(smdctx, 0);
+			break;
+		case ACTION_DUMP:
+			result = smd_write_to_file(smdctx, smd_fd);
+			break;
 		default:
 			fprintf(stderr, "Internal error: unrecognized action\n");
 			break;
@@ -326,6 +383,9 @@ main (int argc, char * const argv[])
   reset_and_depart:
 	if (smdctx)
 		smd_finish(smdctx);
+	if (smd_fd >= 0) {
+		close(smd_fd);
+	}
 	if (fd >= 0) {
 		if (!readonly)
 			fsync(fd);

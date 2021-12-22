@@ -221,6 +221,42 @@ smd_new (smd_redundancy_level_t level)
 } /* smd_new */
 
 /*
+ * smd_new_from_file
+ *
+ * Initialize a new, clear SMD context
+ * for redundancy from a slot_metadata.bin file
+ *
+ * Returns: smd_context_t pointer or NULL on error
+ */
+smd_context_t *
+smd_new_from_file (int fd)
+{
+	smd_context_t *ctx;
+	int n;
+
+	ctx = calloc(1, sizeof(smd_context_t));
+	if (ctx == NULL)
+		return NULL;
+
+	strcpy((char *) ctx->suffixes[0], "_a");
+	strcpy((char *) ctx->suffixes[1], "_b");
+
+	n = read(fd, &ctx->smd_ods, sizeof(ctx->smd_ods));
+
+	if (ctx->smd_ods.smd.version < 3 ||
+	    memcmp(ctx->smd_ods.smd.magic, smd_magic, sizeof(ctx->smd_ods.smd.magic)) != 0) {
+		free(ctx);
+		return NULL;
+	}
+
+	ctx->needs_update = true;
+
+	return ctx;
+
+} /* smd_new */
+
+
+/*
  * smd_finish
  *
  * Frees the allocated context.
@@ -560,4 +596,22 @@ smd_update (smd_context_t *ctx, gpt_context_t *boot_gpt, int bootfd, bool force)
 	ctx->needs_update = false;
 	return 0;
 
+} /* smd_update */
+
+/*
+ * smd_write_to_file
+ *
+ * Writes the slot metadata to a file for debugging purposes
+ *
+ * Returns: 0 on success, negative integer on failure.
+ */
+int
+smd_write_to_file (smd_context_t *ctx, int fd)
+{
+	int n;
+	n = write(fd, (uint8_t *) &ctx->smd_ods, sizeof(ctx->smd_ods));
+	if (n == sizeof(ctx->smd_ods))
+		return 0;
+	else
+		return -1;
 } /* smd_update */

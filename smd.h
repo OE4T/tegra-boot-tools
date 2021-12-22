@@ -24,6 +24,7 @@ typedef struct smd_context_s smd_context_t;
 
 smd_context_t *smd_init(gpt_context_t *boot_gpt, int bootfd);
 smd_context_t *smd_new(smd_redundancy_level_t level);
+smd_context_t *smd_new_from_file(int fd);
 void smd_finish(smd_context_t *ctx);
 smd_redundancy_level_t smd_redundancy_level(smd_context_t *ctx);
 int smd_set_redundancy_level(smd_context_t *ctx, smd_redundancy_level_t level);
@@ -32,5 +33,6 @@ int smd_slot_mark_successful(smd_context_t *ctx, unsigned int which);
 int smd_slot_mark_active(smd_context_t *ctx, unsigned int which);
 int smd_get_current_slot(void);
 int smd_update(smd_context_t *ctx, gpt_context_t *boot_gpt, int bootfd, bool force);
+int smd_write_to_file(smd_context_t *ctx, int fd);
 
 #endif /* smd_h_included */

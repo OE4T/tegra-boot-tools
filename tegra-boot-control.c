@@ -135,7 +135,7 @@ print_smd_info (smd_context_t *smdctx, int curslot)
 int
 main (int argc, char * const argv[])
 {
-	int c, which, fd, smd_fd;
+	int c, which, fd, smd_fd = -1;
 	bool reset_bootdev;
 	int curslot;
 	unsigned int selected_slot = 0;

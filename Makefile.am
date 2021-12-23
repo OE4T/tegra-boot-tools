@@ -7,6 +7,7 @@ AUTOMAKE_OPTIONS = subdir-objects foreign
 ACLOCAL_AMFLAGS = -I m4
 SUBDIRS =
 DIST_SUBDIRS =
+CFLAGS += -Wall -Werror
 
 systemdsystemunitdir = @systemdsystemunitdir@
 tmpfilesdir = @tmpfilesdir@

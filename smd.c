@@ -242,6 +242,10 @@ smd_new_from_file (int fd)
 	strcpy((char *) ctx->suffixes[1], "_b");
 
 	n = read(fd, &ctx->smd_ods, sizeof(ctx->smd_ods));
+	if (n <= 0) {
+		free(ctx);
+		return NULL;
+	}
 
 	if (ctx->smd_ods.smd.version < 3 ||
 	    memcmp(ctx->smd_ods.smd.magic, smd_magic, sizeof(ctx->smd_ods.smd.magic)) != 0) {

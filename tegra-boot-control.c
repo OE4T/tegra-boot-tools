@@ -205,7 +205,7 @@ main (int argc, char * const argv[])
 					option_error = true;
 				else
 					action = ACTION_LOAD;
-				strncpy(slot_metadata_bin_file, optarg, sizeof(slot_metadata_bin_file));
+				strncpy(slot_metadata_bin_file, optarg, sizeof(slot_metadata_bin_file)-1);
 				if (access(slot_metadata_bin_file, R_OK) != 0) {
 					fprintf(stderr, "Error: cannot access slot metadata file %s\n", slot_metadata_bin_file);
 					return 1;
@@ -216,7 +216,7 @@ main (int argc, char * const argv[])
 					option_error = true;
 				else
 					action = ACTION_DUMP;
-				strncpy(slot_metadata_bin_file, optarg, sizeof(slot_metadata_bin_file));
+				strncpy(slot_metadata_bin_file, optarg, sizeof(slot_metadata_bin_file)-1);
 				readonly = true;
 				break;
 			case 0:

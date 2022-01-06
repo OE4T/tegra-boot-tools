@@ -1,2 +1,5 @@
 *~
 *.py[ocd]
+.idea/
+cmake-build*/
+build*/

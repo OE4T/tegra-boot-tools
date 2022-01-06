@@ -88,9 +88,7 @@ or tegra194-based platform.
   reboots.
 
 # Builds
-This package uses GNU Autotools to build.  If you have cloned the repository,
-you should use `autoreconf -i` to generate the configure script and other
-files needed to configure and build.
+This package uses CMake 3.8 or later to build.
 
 ## Dependencies
 This package depends on systemd, libz, and

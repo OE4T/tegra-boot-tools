@@ -8,7 +8,7 @@ Before=cryptsetup-pre.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=@sbindir@/bootcountcheck
+ExecStart=@CMAKE_INSTALL_PREFIX@/@CMAKE_INSTALL_SBINDIR@/bootcountcheck
 
 [Install]
 WantedBy=sysinit.target

@@ -2,11 +2,11 @@
 Description=Record successful system boot
 Requires=boot-complete.target
 After=boot-complete.target
-ConditionPathExists=!@sysconfdir@/initrd-release
+ConditionPathExists=!@CMAKE_INSTALL_SYSCONFDIR@/initrd-release
 
 [Service]
 Type=oneshot
-ExecStart=@bindir@/tegra-bootinfo -b
+ExecStart=@CMAKE_INSTALL_PREFIX@/@CMAKE_INSTALL_BINDIR@/tegra-bootinfo -b
 RemainAfterExit=yes
 
 [Install]

@@ -62,11 +62,11 @@ configure_file(config-files/tegra-bootinfo.conf.in config-files/tegra-bootinfo.c
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/config-files/tegra-bootinfo.conf DESTINATION "${TMPFILESDIR}")
 
 add_library(tegra-boot-tools SHARED
-  smd.c smd.h gpt.c gpt.h bup.c bup.h ver.c ver.h posix-crc32.c posix-crc32.h util.c util.h)
+  smd.c smd.h gpt.c gpt.h bup.c bup.h ver.c ver.h posix-crc32.c posix-crc32.h util.c util.h bootinfo.c bootinfo.h)
 set_target_properties(tegra-boot-tools PROPERTIES
-  VERSION 0.0.0
-  SOVERSION 0)
-target_include_directories(tegra-boot-tools PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+  VERSION 1.0.0
+  SOVERSION 1)
+target_include_directories(tegra-boot-tools PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/nvidia)
 target_link_libraries(tegra-boot-tools PUBLIC PkgConfig::ZLIB PkgConfig::UUID PkgConfig::TEGRA_EEPROM)
 target_compile_definitions(tegra-boot-tools PUBLIC "CONFIGPATH=${CMAKE_INSTALL_FULL_DATADIR}/tegra-boot-tools")
 install(TARGETS tegra-boot-tools LIBRARY)
@@ -101,7 +101,6 @@ add_executable(tegra-bootloader-update
   nvidia/t18x/nvboot_sata_param.h
   nvidia/t18x/nvboot_hash.h
   nvidia/t18x/nvboot_se_defs.h
-  nvidia/t18x/nvboot_osc.h
   nvidia/t18x/nvboot_error.h
   nvidia/t18x/nvboot_config.h
   nvidia/t18x/nvboot_crypto_rsa_param.h

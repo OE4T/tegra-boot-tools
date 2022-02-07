@@ -28,10 +28,10 @@ struct slot_info_s {
 #define SMD_VER_MIN 1U
 #define SMD_VER_MAX 5U
 
-#define SMD_FLAG_RED_BL		(1<<0)
-#define SMD_FLAG_RED_USER	(1<<1)
-#define SMD_FLAG_RED_ROOTFS	(1<<2)
-#define SMD_FLAG_RED_UNIFIED	(1<<5)   // added in version 5
+#define SMD_FLAG_RED_BL         (1<<0)
+#define SMD_FLAG_RED_USER       (1<<1)
+#define SMD_FLAG_RED_ROOTFS     (1<<2)
+#define SMD_FLAG_RED_UNIFIED    (1<<5)   // added in version 5
 #define SMD_FLAG_RED_FLAGS_V5 (SMD_FLAG_RED_BL|SMD_FLAG_RED_USER|SMD_FLAG_RED_ROOTFS|SMD_FLAG_RED_UNIFIED)
 #define SMD_FLAG_RED_FLAGS_PRE_V5 (SMD_FLAG_RED_BL|SMD_FLAG_RED_USER|SMD_FLAG_RED_ROOTFS)
 
@@ -232,7 +232,7 @@ smd_context_t *
 smd_new_from_file (int fd)
 {
 	smd_context_t *ctx;
-	int n;
+	ssize_t n;
 
 	ctx = calloc(1, sizeof(smd_context_t));
 	if (ctx == NULL)
@@ -429,7 +429,7 @@ smd_get_current_slot (void)
 	n = read(fd, cmdline, sizeof(cmdline)-1);
 	if (n < 0) {
 		close(fd);
-		return n;
+		return (int) n;
 	}
 	close(fd);
 	cmdline[n] = '\0';
@@ -562,7 +562,8 @@ int
 smd_update (smd_context_t *ctx, gpt_context_t *boot_gpt, int bootfd, bool force)
 {
 	gpt_entry_t *part;
-	ssize_t n, total, remain;
+	ssize_t n, total;
+	size_t remain;
 	int i;
 
 	if (!(force || ctx->needs_update))
@@ -612,7 +613,7 @@ smd_update (smd_context_t *ctx, gpt_context_t *boot_gpt, int bootfd, bool force)
 int
 smd_write_to_file (smd_context_t *ctx, int fd)
 {
-	int n;
+	ssize_t n;
 	n = write(fd, (uint8_t *) &ctx->smd_ods, sizeof(ctx->smd_ods));
 	if (n == sizeof(ctx->smd_ods))
 		return 0;

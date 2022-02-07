@@ -84,7 +84,7 @@ static unsigned long bootdev_size;
 
 /*
  * For tegra210 platforms, these are the names of partitions
- * to be updated, **in order**.  Note that only the eMMC-based
+ * to be updated, **in order**. Note that only the eMMC-based
  * tegra210 platforms have redundant copies of most of the boot
  * partitions, and that the naming of the redundant NVC partition
  * is different between eMMC and SPIflash platforms.
@@ -160,7 +160,9 @@ print_usage (void)
 static ssize_t
 read_completely_at (int fd, void *buf, size_t bufsiz, off_t offset)
 {
-	ssize_t n, remain, total;
+	ssize_t n, total;
+	size_t remain;
+
 	if (lseek(fd, offset, SEEK_SET) == (off_t) -1)
 		return -1;
 	for (remain = bufsiz, total = 0; remain > 0; total += n, remain -= n) {
@@ -191,7 +193,9 @@ read_completely_at (int fd, void *buf, size_t bufsiz, off_t offset)
 static ssize_t
 write_completely_at (int fd, void *buf, size_t bufsiz, off_t offset, size_t erase_size)
 {
-	ssize_t n, remain, total;
+	ssize_t n, total;
+	size_t remain;
+
 	if (lseek(fd, offset, SEEK_SET) == (off_t) -1)
 		return -1;
 	if (erase_size != 0) {
@@ -293,7 +297,7 @@ update_bct (int bootfd, void *curbct, void *newbct, struct update_entry_s *ent)
 		off_t offset = 0;
 		switch (i) {
 			case 0:
-				offset = bctslotsize;
+				offset = (off_t) bctslotsize;
 				break;
 			case 1:
 				offset = block_size;
@@ -462,7 +466,7 @@ update_bct_t210 (int bootfd, void *curbct, void *newbct, struct update_entry_s *
  *
  * bootfd: file descriptor for boot device
  * gptfd:  file descriptor for second boot (aka "GPT") device
- * ent: pointer to entry from update payload
+ * ent:    pointer to entry from update payload
  * is_bct: 1 if this is a BCT update, 0 otherwise
  * initialize: non-zero if initializing, 0 otherwise
  * bctctx: 'which' context for BCT updates (for t210 platforms)

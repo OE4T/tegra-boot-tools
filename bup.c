@@ -461,7 +461,7 @@ bup_init (const char *pathname)
 	for (i = 0, bufp = (uint8_t *)ctx->buffer + hdr->header_size;
 	     i < ctx->entry_count;
 	     i++, bufp += sizeof(struct bup_ods_entry_s)) {
-		struct bup_ods_entry_s *odsent = (struct bup_ods_entry_s *) bufp;		
+		struct bup_ods_entry_s *odsent = (struct bup_ods_entry_s *) bufp;
 		rstrip(ctx->entries[i].partition, odsent->partition, sizeof(odsent->partition));
 		rstrip(ctx->entries[i].spec, odsent->spec, sizeof(odsent->spec));
 		ctx->entries[i].offset = odsent->offset;
@@ -497,7 +497,7 @@ bup_finish (bup_context_t *ctx)
  * returns the GPT device name from the configuration file.
  */
 const char *
-bup_gpt_device (bup_context_t *ctx)
+bup_gpt_device (bup_context_t *ctx __attribute__((unused)))
 {
 	return gptdev;
 
@@ -509,7 +509,7 @@ bup_gpt_device (bup_context_t *ctx)
  * returns the boot device name from the configuration file.
  */
 const char *
-bup_boot_device (bup_context_t *ctx)
+bup_boot_device (bup_context_t *ctx __attribute__((unused)))
 {
 	return bootdev;
 
@@ -537,7 +537,7 @@ bup_tnspec (bup_context_t *ctx)
  * iterctx between calls.
  *
  * Returns bool: true on success, false on failure.
- * 
+ *
  */
 bool
 bup_enumerate_entries (bup_context_t *ctx, void **iterctx, const char **partname,
@@ -608,7 +608,7 @@ in_list (const char **list, unsigned int listsize, const char *val)
  * by partition name, which makes the logic here a little more complicated.
  *
  * Returns -1 for any errors.
- * 
+ *
  */
 int
 bup_find_missing_entries (bup_context_t *ctx, const char **missing_parts,

@@ -401,6 +401,11 @@ set_bootvar (const char *name, const char *value, char *inputfile)
 			fprintf(stderr, "input value too large\n");
 			return 1;
 		}
+		/*
+		 * Trim off trailing CR/LFs from input file
+		 */
+		while (n > 0 && (valuebuf[n-1] == '\n' || valuebuf[n-1] == '\r'))
+			n -= 1;
 		valuebuf[n] = '\0';
 		if (strlen(valuebuf) != n) {
 			fprintf(stderr, "null character in input value not allowed\n");

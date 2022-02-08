@@ -1,8 +1,7 @@
 Boot information block
 ======================
 
-The tegra-bootinfo program, and it supporting
-library, libtegra-bootinfo, need persistent
+The tegra-bootinfo program needs persistent
 storage for the information it tracks - the
 boot count, boot-in-progress flag, and any
 persistent boot-time variables it stores.

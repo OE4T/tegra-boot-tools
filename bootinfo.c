@@ -665,8 +665,10 @@ bootinfo_open (unsigned int flags, struct bootinfo_context_s **ctxp)
 			if (boot_devinfo_init(ctx) < 0)
 				goto failure_exit;
 			/* If successful, fall through */
-		} else
+		} else {
+			errno = ENODATA;
 			goto failure_exit;
+		}
 	} else if (i < 2 && ctx->valid[1-i]) {
 		/* both of the first two are valid */
 		struct device_info *dp1 = (struct device_info *) (ctx->infobuf[1]);

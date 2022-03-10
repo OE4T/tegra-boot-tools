@@ -25,7 +25,7 @@ pkg_check_modules(UUID REQUIRED IMPORTED_TARGET uuid)
 pkg_check_modules(TEGRA_EEPROM REQUIRED IMPORTED_TARGET tegra-eeprom)
 pkg_check_modules(SYSTEMD REQUIRED IMPORTED_TARGET systemd)
 
-if("${SYSTEMD_SYSTEMD_UNITDIR}" STREQUAL "")
+if("${SYSTEMD_SYSTEM_UNITDIR}" STREQUAL "")
   pkg_get_variable(SYSTEMD_SYSTEM_UNITDIR systemd systemdsystemunitdir)
 endif()
 if("${TMPFILESDIR}" STREQUAL "")

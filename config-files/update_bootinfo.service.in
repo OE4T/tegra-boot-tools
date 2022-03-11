@@ -6,7 +6,7 @@ ConditionPathExists=!@CMAKE_INSTALL_SYSCONFDIR@/initrd-release
 
 [Service]
 Type=oneshot
-ExecStart=@CMAKE_INSTALL_PREFIX@/@CMAKE_INSTALL_BINDIR@/tegra-bootinfo -b
+ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/tegra-bootinfo -b
 RemainAfterExit=yes
 
 [Install]

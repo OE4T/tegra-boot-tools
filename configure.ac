@@ -1,17 +1,17 @@
 dnl
 dnl configure.ac - autoconf script for Tegra boot tools
 dnl
-dnl Copyright (c) 2019-2021, Matthew Madison
+dnl Copyright (c) 2019-2022, Matthew Madison
 dnl
 
-AC_INIT([tegra-boot-tools], [2.4.0])
+AC_INIT([tegra-boot-tools], [2.4.1])
 AC_DEFINE([TEGRA_BOOT_TOOLS_VERSION_MAJOR], [2], [Major version])
 AC_DEFINE([TEGRA_BOOT_TOOLS_VERSION_MINOR], [4], [Minor version])
-AC_DEFINE([TEGRA_BOOT_TOOLS_VERSION_MAINT], [0], [Maintenance level])
+AC_DEFINE([TEGRA_BOOT_TOOLS_VERSION_MAINT], [1], [Maintenance level])
 AM_INIT_AUTOMAKE([subdir-objects foreign])
 AM_SILENT_RULES([yes])
 AC_COPYRIGHT([
-Copyright (c) 2019-2021, Matthew Madison
+Copyright (c) 2019-2022, Matthew Madison
 ])
 AC_CONFIG_MACRO_DIR([m4])
 

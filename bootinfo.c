@@ -653,7 +653,9 @@ bootinfo_open (unsigned int flags, struct bootinfo_context_s **ctxp)
 	}
 	/*
 	 * Caller can pass the CREAT flag to tell us to try
-	 * initializing if no valid data is found.
+	 * initializing if no valid data is found, and add the
+	 * FORCE_INIT flag to tell us to initialize even if valid
+	 * data is found.
 	 *
 	 * Otherwise, choose the current block based on
 	 * which is valid, and if both, which has the
@@ -664,11 +666,17 @@ bootinfo_open (unsigned int flags, struct bootinfo_context_s **ctxp)
 		if (flags & BOOTINFO_O_CREAT) {
 			if (boot_devinfo_init(ctx) < 0)
 				goto failure_exit;
+			ctx->current = 0;
 			/* If successful, fall through */
 		} else {
 			errno = ENODATA;
 			goto failure_exit;
 		}
+	} else if (flags & BOOTINFO_O_FORCE_INIT) {
+		if (boot_devinfo_init(ctx) < 0)
+			goto failure_exit;
+		ctx->current = 0;
+		/* If successful, fall through */
 	} else if (i < 2 && ctx->valid[1-i]) {
 		/* both of the first two are valid */
 		struct device_info *dp1 = (struct device_info *) (ctx->infobuf[1]);

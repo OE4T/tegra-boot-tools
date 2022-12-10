@@ -245,7 +245,7 @@ init_bootinfo (bool force_init)
 	unsigned int flags = BOOTINFO_O_RDWR;
 
 	if (force_init)
-		flags |= BOOTINFO_O_CREAT;
+		flags |= BOOTINFO_O_CREAT|BOOTINFO_O_FORCE_INIT;
 
 	if (bootinfo_open(flags, &ctx) < 0) {
 		perror("bootinfo_open");

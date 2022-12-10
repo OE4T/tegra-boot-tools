@@ -14,6 +14,7 @@ typedef struct bootinfo_var_iter_context_s bootinfo_var_iter_context_t;
 #define BOOTINFO_O_RDONLY (0<<0)
 #define BOOTINFO_O_RDWR	  (3<<0)
 #define BOOTINFO_O_CREAT  (1<<2)
+#define BOOTINFO_O_FORCE_INIT (1<<3)
 
 int bootinfo_open(unsigned int flags, bootinfo_context_t **ctxp);
 int bootinfo_close(bootinfo_context_t *ctx);

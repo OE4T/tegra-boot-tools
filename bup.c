@@ -3,7 +3,7 @@
  *
  * Functions for parsing a Tegra bootloader update payload.
  *
- * Copyright (c) 2019-2021, Matthew Madison
+ * Copyright (c) 2019-2023, Matthew Madison
  *
  */
 #include <stdio.h>
@@ -28,7 +28,20 @@ struct specfield_s {
 	size_t len;
 };
 
-#define MAX_SPEC_FIELDS 32
+typedef enum {
+	BOARDID,
+	FAB,
+	BOARDSKU,
+	BOARDREV,
+	FUSELEVEL,
+	CHIPREV,
+	MACHINE,
+	BOOTDEV,
+	// future additions go above
+	SPEC_FIELD_COUNT
+} spec_index;
+
+#define MAX_SPEC_FIELDS 8
 struct tnspec_s {
 	unsigned int field_count;
 	struct specfield_s fields[MAX_SPEC_FIELDS];
@@ -105,6 +118,8 @@ struct bup_context_s {
 	void *buffer;
 	char our_spec_str[128];
 	struct tnspec_s our_tnspec;
+	char compat_spec_str[128];
+	struct tnspec_s compat_spec;
 	unsigned int entry_count;
 	struct bup_entry_s *entries;
 };
@@ -120,8 +135,11 @@ static const char machineconf[] = XQUOTE(CONFIGPATH) "/machine-name.conf";
 static const char rootfsconf[] = XQUOTE(CONFIGPATH) "/rootfsdev.conf";
 
 /*
- * Specs are of the form
+ * Actual TNSPEC strings are of the form:
  *  BOARDID-FAB-BOARDSKU-BOARDREV-FUSELEVEL-CHIPREV-MACHINE-BOOTDEV
+ *
+ *  where the MACHINE field may also contain hyphens, so we assume
+ *  that the last hyphen in the string separates MACHINE from BOOTDEV.
  */
 static void
 spec_split (const char *specstr, struct tnspec_s *tnspec)
@@ -141,6 +159,15 @@ spec_split (const char *specstr, struct tnspec_s *tnspec)
 			tnspec->fields[i].len = strlen(cp);
 			tnspec->field_count = i + 1;
 			return;
+		} else if (i == MACHINE) {
+			// For the MACHINE field, greedily collect hyphens,
+			// since machine names legitimately have them.
+			// The BOOTDEV field never will.
+			const char *lasthyp, *nexthyp;
+			for (lasthyp = hyp, nexthyp = strchr(lasthyp+1, '-');
+			     nexthyp != NULL;
+			     lasthyp = nexthyp, nexthyp = strchr(lasthyp+1, '-'));
+			hyp = lasthyp;
 		}
 		tnspec->fields[i].len = hyp - cp;
 		cp = hyp + 1;
@@ -186,10 +213,11 @@ specs_match (const struct tnspec_s *e, const struct tnspec_s *s)
 		if (e->fields[i].len == 0 || s->fields[i].len == 0)
 			continue;
 		/*
-		 * 'internal' in sys spec matches 'mmcblk0p<n>' in entry
+		 * For BOOTDEV, 'internal' in sys spec matches 'mmcblk0p<n>' in entry
 		 */
-		if (s->fields[i].len == 8 && memcmp(s->fields[i].start, "internal", 8) == 0 &&
-		    e->fields[i].len > 8 && memcmp(e->fields[i].start, "mmcblk0p", 8) == 0)
+		if (i == BOOTDEV &&
+		    (s->fields[i].len == 8 && memcmp(s->fields[i].start, "internal", 8) == 0 &&
+		     e->fields[i].len > 8 && memcmp(e->fields[i].start, "mmcblk0p", 8) == 0))
 			continue;
 		/*
 		 * Otherwise, text must match exactly
@@ -276,6 +304,180 @@ construct_tnspec (char *buf, size_t bufsiz)
 	return n;
 
 } /* construct_tnspec */
+
+/*
+ * Generate a compatibility spec that can be used
+ * to match non-exact BUP entries that are compatible
+ * with the current machine.
+ *
+ * Fields:
+ * 0 = BOARDID
+ * 1 = FAB
+ * 2 = BOARDSKU
+ * 3 = BOARDREV
+ * 4 = FUSELEVEL
+ * 5 = CHIPREV
+ * 6 = MACHINE
+ * 7 = BOOTDEV
+ *
+ * Based on the nv-l4t-bootloader-config.sh script
+ * in L4T, compatibility specs only modify fields 1-3 and 5;
+ * fields 0 and 4 are copied over from the tnspec, and
+ * field 7 is always null.
+ *
+ * Field 6 is handled differently here than in stock L4T,
+ * which does generate a compatibile 'machine' name
+ * that accounts for changes in the names of the .conf files
+ * in different versions of the BSP. Since L4T is a binary
+ * distribution that builds a single kernel to cover all
+ * of the modules/dev kits, that's OK; for OE/Yocto builds,
+ * where the kernel/bootloader/etc. are built per-machine,
+ * we simply carry over the MACHINE part of the TNSPEC
+ * from the original.
+ *
+ */
+static int
+generate_compat_spec (struct tnspec_s *tnspec, struct tnspec_s *compat,
+		      char *compatstr, size_t compatstrsize)
+{
+	size_t compatlen;
+	const char *newvals[MAX_SPEC_FIELDS-1];
+	size_t newlens[MAX_SPEC_FIELDS-1];
+	int i;
+
+	memset(compat, 0, sizeof(*compat));
+	*compatstr = '\0';
+	// TNSPECs should always have 8 fields.
+	// Buffer size check here is for max length, to avoid checks
+	// with every copy.
+	// NVIDIA always uses a 4-digit BOARDID, so no point in checking
+	// if it's not length 4.
+	if (tnspec->field_count != MAX_SPEC_FIELDS || compatstrsize < 128 || tnspec->fields[BOARDID].len != 4)
+		return -1;
+
+	// Start by assuming all fields except BOOTDEV are copied over
+	for (i = 0; i < BOOTDEV; i++) {
+		newvals[i] = tnspec->fields[i].start;
+		newlens[i] = tnspec->fields[i].len;
+	}
+
+	if (memcmp(tnspec->fields[BOARDID].start, "2180", 4) == 0) {
+		// Jetson-TX1
+		// FAB is don't care
+		newlens[FAB] = 0;
+		// BOARDSKU is don't care
+		newlens[BOARDSKU] = 0;
+		// BOARDREV is don't care
+		newlens[BOARDREV] = 0;
+		// CHIPREV is don't care
+		newlens[CHIPREV] = 0;
+	} else if (memcmp(tnspec->fields[BOARDID].start, "3448", 4) == 0) {
+		// Jetson Nano
+		if (tnspec->fields[FAB].len == 3) {
+			if (*tnspec->fields[FAB].start == '0')
+				newvals[FAB] = "000";
+			else if (*tnspec->fields[FAB].start == '1')
+				newvals[FAB] = "100";
+			else if (*tnspec->fields[FAB].start == '2')
+				newvals[FAB] = "200";
+			else
+				newvals[FAB] = "300";
+		}
+		// BOARDREV is don't care
+		newlens[BOARDREV] = 0;
+		// CHIPREV is don't care
+		newlens[CHIPREV] = 0;
+	} else if (memcmp(tnspec->fields[BOARDID].start, "3310", 4) == 0) {
+		// Jetson TX2 (original 8GB)
+		if (tnspec->fields[FAB].len == 3 && memcmp(tnspec->fields[FAB].start, "B00", 3) != 0 &&
+		    *tnspec->fields[FAB].start >= 'B')
+			newvals[FAB] = "B01";
+		// BOARDSKU is don't care
+		newlens[BOARDSKU] = 0;
+		// BOARDREV is don't care
+		newlens[BOARDREV] = 0;
+		// CHIPREV is don't care
+		newlens[CHIPREV] = 0;
+	} else if (memcmp(tnspec->fields[BOARDID].start, "3489", 4) == 0) {
+		// Jetson TX2-4GB and TX2i
+		if (tnspec->fields[FAB].len == 3) {
+			if (*tnspec->fields[FAB].start >= '0' && *tnspec->fields[FAB].start < '3')
+				newvals[FAB] = "200";
+			else
+				newvals[FAB] = "300";
+		}
+		// BOARDSKU is don't care
+		newlens[BOARDSKU] = 0;
+		// BOARDREV is don't care
+		newlens[BOARDREV] = 0;
+		// CHIPREV is don't care
+		newlens[CHIPREV] = 0;
+	} else if (memcmp(tnspec->fields[BOARDID].start, "3636", 4) == 0) {
+		// Jetson TX2-NX
+		// FAB is don't care
+		newlens[FAB] = 0;
+		// BOARDREV is don't care
+		newlens[BOARDREV] = 0;
+		// CHIPREV is don't care
+		newlens[CHIPREV] = 0;
+	} else if (memcmp(tnspec->fields[BOARDID].start, "2888", 4) == 0) {
+		// Jetson AGX Xavier
+		if (tnspec->fields[FAB].len == 3) {
+			if (memcmp(tnspec->fields[FAB].start, "400", 3) == 0) {
+				if (tnspec->fields[BOARDSKU].len == 4 &&
+				    memcmp(tnspec->fields[BOARDSKU].start, "0004", 4) == 0) {
+					// for FAB 400 BOARDSKU 0004, BOARDREV is don't care
+					newlens[BOARDREV] = 0;
+				} else {
+					// all other FAB 400 BOARDSKUs are equivalent to 0001
+					newvals[BOARDSKU] = "0001";
+					newlens[BOARDSKU] = 4;
+					// and BOARDREV Axx-Dxx == D.0, all others E.0
+					if (tnspec->fields[BOARDREV].len > 0) {
+						newlens[BOARDREV] = 3;
+						if (*tnspec->fields[BOARDREV].start >= 'A' &&
+						    *tnspec->fields[BOARDREV].start <= 'D')
+							newvals[BOARDREV] = "D.0";
+						else
+							newvals[BOARDREV] = "E.0";
+					}
+				}
+			} else if (memcmp(tnspec->fields[FAB].start, "600", 3) == 0 &&
+				   tnspec->fields[BOARDSKU].len == 4 &&
+				   memcmp(tnspec->fields[BOARDSKU].start, "0008", 4) == 0) {
+				// for FAB 600 BOARDSKU 0008, BOARDREV is don't care
+				newlens[BOARDREV] = 0;
+			}
+		}
+	} else if (memcmp(tnspec->fields[BOARDID].start, "3668", 4) == 0) {
+		// Jetson Xavier NX
+		if (tnspec->fields[FAB].len == 3) {
+			// All FABs except 301 are equivalent to FAB 100
+			if (memcmp(tnspec->fields[FAB].start, "301", 3) != 0)
+				newvals[FAB] = "100";
+		}
+		// BOARDSKU is don't care
+		newlens[BOARDSKU] = 0;
+		// BOARDREV is don't care
+		newlens[BOARDREV] = 0;
+		// CHIPREV is don't care
+		newlens[CHIPREV] = 0;
+	}
+	// Field 8 - BOOTDEV - is always don't care.
+	for (i = 0, compatlen = 0; i < 7; i++) {
+		compat->fields[i].start = compatstr + compatlen;
+		compat->fields[i].len = newlens[i];
+		if (newlens[i] > 0) {
+			memcpy(compatstr + compatlen, newvals[i], newlens[i]);
+			compatlen += newlens[i];
+		}
+		compatstr[compatlen++] = '-';
+	}
+	compat->field_count = 8;
+	compatstr[compatlen] = '\0';
+	return 0;
+
+} /* generate_compat_spec */
 
 static char *
 bcd_format (char *buf, uint16_t bcdval)
@@ -388,6 +590,8 @@ bup_init (const char *pathname)
 		return NULL;
 	}
 	spec_split(ctx->our_spec_str, &ctx->our_tnspec);
+	generate_compat_spec(&ctx->our_tnspec, &ctx->compat_spec,
+			     ctx->compat_spec_str, sizeof(ctx->compat_spec_str));
 
 	if (pathname == NULL)
 		return ctx;
@@ -518,7 +722,8 @@ bup_boot_device (bup_context_t *ctx __attribute__((unused)))
 /*
  * bup_tnspec
  *
- * returns the TNSPEC string from the configuration file.
+ * returns the TNSPEC string generated from the
+ * board spec in the EEPROM plus our configuration files.
  */
 const char *
 bup_tnspec (bup_context_t *ctx)
@@ -526,6 +731,21 @@ bup_tnspec (bup_context_t *ctx)
 	return ctx->our_spec_str;
 
 } /* bup_tnspec */
+
+/*
+ * bup_compat_spec
+ *
+ * returns the COMPATIBLE_SPEC string derived from
+ * our TNSPEC, or NULL if there is none.
+ */
+const char *
+bup_compat_spec (bup_context_t *ctx)
+{
+	if (ctx->compat_spec.field_count == 0)
+		return NULL;
+	return ctx->compat_spec_str;
+
+} /* bup_compat_spec */
 
 /*
  * bup_enumerate_entries
@@ -554,6 +774,8 @@ bup_enumerate_entries (bup_context_t *ctx, void **iterctx, const char **partname
 		if (ent->op_mode != OP_MODE_PREPRODUCTION) {
 			spec_split(ent->spec, &entspec);
 			if (specs_match(&entspec, &ctx->our_tnspec))
+				break;
+			if (ctx->compat_spec.field_count > 0 && specs_match(&entspec, &ctx->compat_spec))
 				break;
 		}
 	}
@@ -644,7 +866,8 @@ bup_find_missing_entries (bup_context_t *ctx, const char **missing_parts,
 		 * by the check above since both arrays are the same
 		 * size
 		 */
-		if (specs_match(&entspec, &ctx->our_tnspec))
+		if (specs_match(&entspec, &ctx->our_tnspec) ||
+		    (ctx->compat_spec.field_count > 0 && specs_match(&entspec, &ctx->compat_spec)))
 			matching_parts[matchcount++] = ent->partition;
 	}
 

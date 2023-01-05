@@ -1290,6 +1290,9 @@ main (int argc, char * const argv[])
 	redundant_entry_count = nonredundant_entry_count = 0;
 	largest_length = 0;
 	memset(&mb1_other, 0, sizeof(mb1_other));
+	printf("Native TNSPEC:   %s\n", bup_tnspec(bupctx));
+	if (bup_compat_spec(bupctx) != NULL)
+		printf("Compatible with: %s\n", bup_compat_spec(bupctx));
 	while (bup_enumerate_entries(bupctx, &bupiter, &partname, &offset, &length, &version)) {
 		gpt_entry_t *part, *part_b;
 		char partname_b[64], pathname_b[PATH_MAX];

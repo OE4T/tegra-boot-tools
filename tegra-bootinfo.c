@@ -452,7 +452,7 @@ int
 main (int argc, char * const argv[])
 {
 
-	int c, which, ret;
+	int c, which;
 	bool omitname = false;
 	bool force_init = false;
 	char *inputfile = NULL;

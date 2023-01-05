@@ -69,6 +69,7 @@ set_target_properties(tegra-boot-tools PROPERTIES
 target_include_directories(tegra-boot-tools PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/nvidia)
 target_link_libraries(tegra-boot-tools PUBLIC PkgConfig::ZLIB PkgConfig::UUID PkgConfig::TEGRA_EEPROM)
 target_compile_definitions(tegra-boot-tools PUBLIC "CONFIGPATH=${CMAKE_INSTALL_FULL_DATADIR}/tegra-boot-tools")
+target_compile_options(tegra-boot-tools PRIVATE -Wall -Werror)
 install(TARGETS tegra-boot-tools LIBRARY)
 
 add_executable(tegra-bootloader-update
@@ -134,14 +135,17 @@ add_executable(tegra-bootloader-update
   nvidia/t19x/nvboot_boot_component.h)
 target_include_directories(tegra-bootloader-update PRIVATE nvidia ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(tegra-bootloader-update PUBLIC tegra-boot-tools PkgConfig::TEGRA_EEPROM)
+target_compile_options(tegra-bootloader-update PRIVATE -Wall -Werror)
 
 add_executable(tegra-boot-control tegra-boot-control.c)
 target_include_directories(tegra-boot-control PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(tegra-boot-control PUBLIC tegra-boot-tools PkgConfig::TEGRA_EEPROM)
+target_compile_options(tegra-boot-control PRIVATE -Wall -Werror)
 
 add_executable(tegra-bootinfo tegra-bootinfo.c)
 target_include_directories(tegra-bootinfo PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(tegra-bootinfo PUBLIC tegra-boot-tools PkgConfig::ZLIB PkgConfig::TEGRA_EEPROM)
+target_compile_options(tegra-bootinfo PRIVATE -Wall -Werror)
 
 install(TARGETS tegra-boot-tools tegra-bootloader-update tegra-boot-control tegra-bootinfo RUNTIME)
 install(PROGRAMS scripts/bootcountcheck scripts/nvbootctrl scripts/nv_update_engine TYPE SBIN)

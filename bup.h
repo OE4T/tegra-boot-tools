@@ -1,6 +1,6 @@
 #ifndef bup_h_included
 #define bup_h_included
-/* Copyright (c) 2019-2020, Matthew Madison */
+/* Copyright (c) 2019-2023, Matthew Madison */
 
 #include <sys/types.h>
 #include <stdbool.h>
@@ -15,6 +15,7 @@ void bup_finish(bup_context_t *ctx);
 const char *bup_gpt_device(bup_context_t *ctx);
 const char *bup_boot_device(bup_context_t *ctx);
 const char *bup_tnspec(bup_context_t *ctx);
+const char *bup_compat_spec(bup_context_t *ctx);
 bool bup_enumerate_entries(bup_context_t *ctx, void **iterctx,
 			   const char **partname, off_t *offset,
 			   size_t *length, unsigned int *version);

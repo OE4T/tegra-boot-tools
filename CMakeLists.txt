@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: MIT
-# Copyright (c) 2021, Matthew Madison
+# Copyright (c) 2021-2023, Matthew Madison
 
 cmake_minimum_required(VERSION 3.8)
 cmake_policy(SET CMP0048 NEW)
 
-project(tegra_boot_tools LANGUAGES C VERSION 3.0.1)
+project(tegra_boot_tools LANGUAGES C VERSION 3.1.0)
 
 include(GNUInstallDirs)
 

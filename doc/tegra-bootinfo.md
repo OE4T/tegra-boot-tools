@@ -11,7 +11,7 @@ in recovery when the limit is exceeded - not a desirable outcome
 if the device runs unattended and is possibly subject to power outages
 that can happen at boot time.
 
-The `tega-bootinfo` tool is intended to be run from the initrd on
+The `tegra-bootinfo` tool is intended to be run from the initrd on
 these systems. It records (in a sector of the eMMC, or in the QSPI
 boot flash on non-eMMC-equipped Jetson modules) that a boot is in progress,
 and notifies the NVIDIA bootloader (on TX2/Xavier devices) that the boot

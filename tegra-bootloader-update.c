@@ -578,7 +578,22 @@ process_entry (bup_context_t *bupctx, int bootfd, int gptfd, struct update_entry
 		perror(ent->devname);
 		return -1;
 	}
-	erase_size = 512 * ((ent->length + 511) / 512);
+
+	erase_size = lseek(fd, 0, SEEK_END);
+	if (erase_size < 0) {
+		printf("[FAIL]\n");
+		perror(ent->devname);
+		close(fd);
+		return -1;
+	}
+
+	if (lseek(fd, 0, SEEK_SET) < 0) {
+		printf("[FAIL]\n");
+		perror(ent->devname);
+		close(fd);
+		return -1;
+	}
+
 	if (write_completely_at(fd, contentbuf, ent->length, 0, erase_size) < 0) {
 		printf("[FAIL]\n");
 		perror(ent->devname);

@@ -311,7 +311,8 @@ show_bootvar (const char *name, bool omitname)
 	bootinfo_context_t *ctx;
 	bootinfo_var_iter_context_t *iter;
 	int rc = 0;
-	char namebuf[256], valuebuf[1024];
+	char namebuf[256];
+	static char valuebuf[65536];
 
 	if (bootinfo_open(BOOTINFO_O_RDONLY, &ctx) < 0) {
 		perror("bootinfo_open");
@@ -361,7 +362,7 @@ int
 set_bootvar (const char *name, const char *value, char *inputfile)
 {
 	bootinfo_context_t *ctx;
-	static char valuebuf[1024];
+	static char valuebuf[65536];
 	int rc = 0;
 
 	if (inputfile != NULL) {

@@ -95,8 +95,6 @@ struct bup_entry_s {
 	char spec[65];
 };
 
-#define BUFFERSIZE (1024 * 1024 * 1024)
-
 /*
  * API context
  */
@@ -349,7 +347,8 @@ free_context (bup_context_t *ctx)
 		close(ctx->fd);
 	if (ctx->entries)
 		free(ctx->entries);
-	free(ctx->buffer);
+	if (ctx->buffer != NULL)
+		free(ctx->buffer);
 	free(ctx);
 } /* free_context */
 
@@ -378,13 +377,8 @@ bup_init (const char *pathname)
 		return NULL;
 	memset(ctx, 0, sizeof(*ctx));
 	ctx->fd = -1;
-	ctx->buffer = malloc(BUFFERSIZE);
-	if (ctx->buffer == NULL) {
-		free(ctx);
-		return NULL;
-	}
 	if (construct_tnspec(ctx->our_spec_str, sizeof(ctx->our_spec_str)) < 0) {
-		free(ctx);
+		free_context(ctx);
 		return NULL;
 	}
 	spec_split(ctx->our_spec_str, &ctx->our_tnspec);
@@ -403,7 +397,14 @@ bup_init (const char *pathname)
 		return NULL;
 	}
 	payload_size = st.st_size;
-	n = read(fd, ctx->buffer, BUFFERSIZE);
+
+	ctx->buffer = malloc(payload_size);
+	if (ctx->buffer == NULL) {
+		free_context(ctx);
+		return NULL;
+	}
+
+	n = read(fd, ctx->buffer, payload_size);
 	if (n < sizeof(struct bup_header_s)) {
 		free_context(ctx);
 		return NULL;
@@ -433,7 +434,7 @@ bup_init (const char *pathname)
 		return NULL;
 	}
 	totsize = hdr->header_size + hdr->entry_count * sizeof(struct bup_ods_entry_s);
-	if (totsize > BUFFERSIZE) {
+	if (totsize > payload_size) {
 		fprintf(stderr, "%s: cannot load all update entries\n", pathname);
 		free_context(ctx);
 		return NULL;

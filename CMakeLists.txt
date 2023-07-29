@@ -4,7 +4,7 @@
 cmake_minimum_required(VERSION 3.8)
 cmake_policy(SET CMP0048 NEW)
 
-project(tegra_boot_tools LANGUAGES C VERSION 3.1.1)
+project(tegra_boot_tools LANGUAGES C VERSION 3.1.2)
 
 include(GNUInstallDirs)
 
